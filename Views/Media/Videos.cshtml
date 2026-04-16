@@ -1,0 +1,53 @@
+@model IEnumerable<FvCore.Models.MediaItem>
+@{
+    ViewData["Title"] = "Videos";
+}
+
+<div class="page-header">
+    <h2>VIDEOS</h2>
+    <div class="page-subtitle">@Model.Count() videos en la biblioteca</div>
+</div>
+
+<form method="get" class="search-bar">
+    <input type="text" name="search" id="search-input" value="@ViewBag.Search"
+           placeholder="Buscar videos..." autocomplete="off" />
+    <button type="submit">⌕</button>
+</form>
+
+<!-- Inline Video Player -->
+<div id="video-player-container" class="video-player-container">
+    <button class="video-close">✕ CERRAR</button>
+    <video controls id="video-element"></video>
+</div>
+
+@if (Model.Any())
+{
+    <div class="video-grid">
+        @foreach (var video in Model)
+        {
+            <div class="video-card" data-video-id="@video.Id" data-title="@video.Titulo">
+                <div class="video-thumb">
+                    🎬
+                    <div class="play-overlay">
+                        <span style="font-size: 3rem; color: var(--neon-purple);">▶</span>
+                    </div>
+                </div>
+                <div class="video-info">
+                    <div class="video-title" title="@video.Titulo">@video.Titulo</div>
+                    <div class="video-meta">
+                        <span>@(video.AlbumName ?? "—")</span>
+                        <span style="color: var(--neon-purple);">@(video.Calidad ?? "SD")</span>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+else
+{
+    <div class="empty-state">
+        <div class="empty-icon">▶</div>
+        <div class="empty-text">No se encontraron videos</div>
+        <div class="empty-hint">Los videos de la carpeta Películas aparecerán aquí</div>
+    </div>
+}

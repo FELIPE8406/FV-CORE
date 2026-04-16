@@ -1,0 +1,145 @@
+@using FvCore.Models
+@{
+    ViewData["Title"] = "Dashboard";
+
+    var totalTracks = (int)ViewBag.TotalTracks;
+    var totalVideos = (int)ViewBag.TotalVideos;
+    var totalArtists = (int)ViewBag.TotalArtists;
+    var totalPlaylists = (int)ViewBag.TotalPlaylists;
+    var totalFavorites = (int)ViewBag.TotalFavorites;
+    var recentTracks = (List<MediaItem>)ViewBag.RecentTracks;
+    var topArtists = (List<Artist>)ViewBag.TopArtists;
+    var genres = ViewBag.Genres as dynamic;
+}
+
+<!-- Page Header -->
+<div class="page-header">
+    <h2>DASHBOARD</h2>
+    <div class="page-subtitle">Resumen del Sistema — Plataforma de Streaming FV-CORE</div>
+</div>
+
+<!-- Stats Grid -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-icon">♪</div>
+        <div class="stat-value">@totalTracks.ToString("N0")</div>
+        <div class="stat-label">Pistas de Audio</div>
+    </div>
+    <div class="stat-card purple">
+        <div class="stat-icon">▶</div>
+        <div class="stat-value">@totalVideos.ToString("N0")</div>
+        <div class="stat-label">Videos</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon">♫</div>
+        <div class="stat-value">@totalArtists.ToString("N0")</div>
+        <div class="stat-label">Artistas</div>
+    </div>
+    <div class="stat-card purple">
+        <div class="stat-icon">☰</div>
+        <div class="stat-value">@totalPlaylists.ToString("N0")</div>
+        <div class="stat-label">Playlists</div>
+    </div>
+    <div class="stat-card pink">
+        <div class="stat-icon">♥</div>
+        <div class="stat-value">@totalFavorites.ToString("N0")</div>
+        <div class="stat-label">Favoritos</div>
+    </div>
+</div>
+
+<!-- Top Artists -->
+@if (topArtists != null && topArtists.Any())
+{
+    <div class="section-header">
+        <h3>ARTISTAS DESTACADOS</h3>
+        <a href="@Url.Action("Index", "Artists")" class="view-all">VER TODOS →</a>
+    </div>
+    <div class="artists-grid">
+        @foreach (var artist in topArtists)
+        {
+            <a href="@Url.Action("Details", "Artists", new { id = artist.Id })" class="artist-card">
+                <img class="artist-img" src="/cover/artist/@artist.Id" alt="@artist.Nombre" loading="lazy" />
+                <div class="artist-info">
+                    <div class="artist-name" title="@artist.Nombre">@artist.Nombre</div>
+                    <div class="artist-tracks">@artist.MediaItems.Count pistas</div>
+                </div>
+            </a>
+        }
+    </div>
+}
+
+<!-- Genre Distribution -->
+@if (genres != null)
+{
+    var genreList = genres as IEnumerable<dynamic>;
+    var maxCount = genreList?.FirstOrDefault()?.Count ?? 1;
+
+    <div class="section-header">
+        <h3>DISTRIBUCIÓN DE GÉNEROS</h3>
+    </div>
+    <div class="genre-bars">
+        @foreach (var g in genreList)
+        {
+            var percentage = (int)((double)g.Count / (double)maxCount * 100);
+            <div class="genre-bar-item">
+                <span class="genre-name">@g.Genre</span>
+                <div class="genre-bar">
+                    <div class="genre-bar-fill" style="width: @(percentage)%"></div>
+                </div>
+                <span class="genre-count">@g.Count</span>
+            </div>
+        }
+    </div>
+}
+
+<!-- Recent Tracks -->
+@if (recentTracks != null && recentTracks.Any())
+{
+    <div class="section-header">
+        <h3>AGREGADOS RECIENTEMENTE</h3>
+        <a href="@Url.Action("Music", "Media")" class="view-all">TODA LA MÚSICA →</a>
+    </div>
+    <table class="track-list">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Título</th>
+                <th>Artista</th>
+                <th>Género</th>
+                <th>Calidad</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @for (int i = 0; i < recentTracks.Count; i++)
+            {
+                var track = recentTracks[i];
+                <tr data-track-id="@track.Id"
+                    data-title="@track.Titulo"
+                    data-artist="@(track.Artist?.Nombre ?? "Desconocido")"
+                    data-cover-id="@track.Id">
+                    <td class="track-number">@(i + 1)</td>
+                    <td>
+                        <div class="track-title-cell">
+                            <img class="track-cover" src="/cover/@track.Id" alt="" loading="lazy" />
+                            <div class="track-info">
+                                <div class="track-title">@track.Titulo</div>
+                                <div class="track-album">@(track.AlbumName ?? "")</div>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="track-artist">@(track.Artist?.Nombre ?? "—")</td>
+                    <td><span class="track-genre">@(track.Genero ?? "—")</span></td>
+                    <td class="track-quality">@(track.Calidad ?? "—")</td>
+                    <td>
+                        <button class="btn-favorite @(track.IsFavorite ? "active" : "")"
+                                data-media-id="@track.Id"
+                                title="Agregar a favoritos">
+                            @(track.IsFavorite ? "♥" : "♡")
+                        </button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}

@@ -1,0 +1,38 @@
+@model IEnumerable<FvCore.Models.Playlist>
+@{
+    ViewData["Title"] = "Playlists";
+}
+
+<div class="page-header">
+    <h2>PLAYLISTS</h2>
+    <div class="page-subtitle">@Model.Count() playlists</div>
+</div>
+
+<div style="margin-bottom: 24px;">
+    <button id="create-playlist-btn" class="btn-neon purple">
+        + NUEVA PLAYLIST
+    </button>
+</div>
+
+@if (Model.Any())
+{
+    <div class="playlist-grid">
+        @foreach (var playlist in Model)
+        {
+            <a href="@Url.Action("Details", "Playlists", new { id = playlist.Id })" class="playlist-card">
+                <div class="playlist-icon">☰</div>
+                <div class="playlist-name">@playlist.Nombre</div>
+                <div class="playlist-count">@playlist.PlaylistMediaItems.Count pistas</div>
+                <div class="playlist-date">Creada el @playlist.FechaCreacion.ToString("dd MMM, yyyy")</div>
+            </a>
+        }
+    </div>
+}
+else
+{
+    <div class="empty-state">
+        <div class="empty-icon">☰</div>
+        <div class="empty-text">Aún no tienes playlists</div>
+        <div class="empty-hint">Haz clic en "Nueva Playlist" para crear una</div>
+    </div>
+}

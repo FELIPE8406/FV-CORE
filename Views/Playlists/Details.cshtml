@@ -1,0 +1,73 @@
+@model FvCore.Models.Playlist
+@{
+    ViewData["Title"] = Model.Nombre;
+    var tracks = Model.PlaylistMediaItems.OrderBy(pmi => pmi.Orden).ToList();
+}
+
+<div class="page-header">
+    <h2>@Model.Nombre.ToUpper()</h2>
+    <div class="page-subtitle">@tracks.Count pistas • Creada el @Model.FechaCreacion.ToString("dd MMM, yyyy")</div>
+</div>
+
+<div style="margin-bottom: 20px; display: flex; gap: 12px;">
+    <button class="btn-neon" onclick="document.querySelectorAll('tr[data-track-id]')[0]?.click()">
+        ▶ REPRODUCIR TODO
+    </button>
+    <button class="btn-neon shuffle-btn" onclick="FvCore.shufflePlay()">
+        🔀 ALEATORIO
+    </button>
+    <a href="@Url.Action("Index", "Playlists")" class="btn-neon small">← VOLVER</a>
+</div>
+
+@if (tracks.Any())
+{
+    <table class="track-list">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Título</th>
+                <th>Artista</th>
+                <th>Género</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @for (int i = 0; i < tracks.Count; i++)
+            {
+                var pmi = tracks[i];
+                var track = pmi.MediaItem;
+                <tr data-track-id="@track.Id"
+                    data-title="@track.Titulo"
+                    data-artist="@(track.Artist?.Nombre ?? "Desconocido")"
+                    data-cover-id="@track.Id">
+                    <td class="track-number">@(i + 1)</td>
+                    <td>
+                        <div class="track-title-cell">
+                            <img class="track-cover" src="/cover/@track.Id" alt="" loading="lazy" />
+                            <div class="track-info">
+                                <div class="track-title">@track.Titulo</div>
+                                <div class="track-album">@(track.AlbumName ?? "")</div>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="track-artist">@(track.Artist?.Nombre ?? "—")</td>
+                    <td><span class="track-genre">@(track.Genero ?? "—")</span></td>
+                    <td>
+                        <button class="btn-favorite @(track.IsFavorite ? "active" : "")"
+                                data-media-id="@track.Id" title="Favorito">
+                            @(track.IsFavorite ? "♥" : "♡")
+                        </button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+else
+{
+    <div class="empty-state">
+        <div class="empty-icon">☰</div>
+        <div class="empty-text">Esta playlist está vacía</div>
+        <div class="empty-hint">Agrega pistas desde la sección de Música</div>
+    </div>
+}

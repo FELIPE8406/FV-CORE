@@ -1,0 +1,39 @@
+@model IEnumerable<FvCore.Models.Artist>
+@{
+    ViewData["Title"] = "Artistas";
+}
+
+<div class="page-header">
+    <h2>ARTISTAS</h2>
+    <div class="page-subtitle">@Model.Count() artistas en la biblioteca</div>
+</div>
+
+<form method="get" class="search-bar">
+    <input type="text" name="search" id="search-input" value="@ViewBag.Search"
+           placeholder="Buscar artistas..." autocomplete="off" />
+    <button type="submit">⌕</button>
+</form>
+
+@if (Model.Any())
+{
+    <div class="artists-grid">
+        @foreach (var artist in Model)
+        {
+            <a href="@Url.Action("Details", "Artists", new { id = artist.Id })" class="artist-card">
+                <img class="artist-img" src="/cover/artist/@artist.Id" alt="@artist.Nombre" loading="lazy" />
+                <div class="artist-info">
+                    <div class="artist-name" title="@artist.Nombre">@artist.Nombre</div>
+                    <div class="artist-tracks">@artist.TrackCount pistas</div>
+                </div>
+            </a>
+        }
+    </div>
+}
+else
+{
+    <div class="empty-state">
+        <div class="empty-icon">♫</div>
+        <div class="empty-text">No se encontraron artistas</div>
+        <div class="empty-hint">Intenta con otro término de búsqueda</div>
+    </div>
+}

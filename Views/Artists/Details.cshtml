@@ -1,0 +1,120 @@
+@model FvCore.Models.Artist
+@{
+    ViewData["Title"] = Model.Nombre;
+    var albums = ViewBag.Albums as Dictionary<string, List<FvCore.Models.MediaItem>>;
+}
+
+<div class="page-header">
+    <h2>@Model.Nombre.ToUpper()</h2>
+    <div class="page-subtitle">@Model.MediaItems.Count pistas • @(albums?.Count ?? 0) álbumes</div>
+</div>
+
+<div style="display: flex; gap: 24px; align-items: flex-start; margin-bottom: 32px;">
+    <img src="/cover/artist/@Model.Id" alt="@Model.Nombre"
+         style="width: 180px; height: 180px; object-fit: cover; border: 1px solid var(--neon-green); box-shadow: var(--neon-green-glow-sm);" />
+    <div>
+        <div style="margin-bottom: 12px; display: flex; gap: 12px;">
+            <button class="btn-neon" onclick="document.querySelectorAll('tr[data-track-id]')[0]?.click()">
+                ▶ REPRODUCIR TODO
+            </button>
+            <button class="btn-neon shuffle-btn" onclick="FvCore.shufflePlay()">
+                🔀 ALEATORIO
+            </button>
+        </div>
+        <div style="font-size: 0.8rem; color: var(--text-secondary);">
+            Total de pistas: @Model.MediaItems.Count
+        </div>
+    </div>
+</div>
+
+@if (albums != null)
+{
+    @foreach (var album in albums)
+    {
+        <div class="album-section">
+            <div class="album-header">
+                @{
+                    var firstTrack = album.Value.FirstOrDefault();
+                }
+                <img class="album-cover" src="/cover/@(firstTrack?.Id ?? 0)" alt="@album.Key" />
+                <div>
+                    <div class="album-name">@album.Key</div>
+                    <div class="album-track-count">@album.Value.Count pistas</div>
+                </div>
+            </div>
+            <table class="track-list">
+                <thead>
+                    <tr>
+                        <th class="track-select-cell">
+                            <input type="checkbox" class="track-checkbox select-all-album" title="Seleccionar álbum" />
+                        </th>
+                        <th>#</th>
+                        <th>Título</th>
+                        <th>Género</th>
+                        <th>Calidad</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @for (int i = 0; i < album.Value.Count; i++)
+                    {
+                        var track = album.Value[i];
+                        <tr data-track-id="@track.Id"
+                            data-title="@track.Titulo"
+                            data-artist="@Model.Nombre"
+                            data-cover-id="@track.Id">
+                            <td class="track-select-cell">
+                                <input type="checkbox" class="track-checkbox track-select-cb" data-id="@track.Id" />
+                            </td>
+                            <td class="track-number">@(i + 1)</td>
+                            <td>
+                                <div class="track-title-cell">
+                                    <img class="track-cover" src="/cover/@track.Id" alt="" loading="lazy" />
+                                    <div class="track-info">
+                                        <div class="track-title">@track.Titulo</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td><span class="track-genre">@(track.Genero ?? "—")</span></td>
+                            <td class="track-quality">@(track.Calidad ?? "—")</td>
+                            <td>
+                                <div class="track-actions">
+                                    <button class="btn-quick-add" data-media-id="@track.Id" title="Agregar a playlist">+</button>
+                                    <button class="btn-favorite @(track.IsFavorite ? "active" : "")"
+                                            data-media-id="@track.Id" title="Favorito">
+                                        @(track.IsFavorite ? "♥" : "♡")
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+}
+
+<!-- Floating Selection Bar -->
+<div id="selection-bar" class="selection-bar">
+    <div class="selection-count"><span id="selection-count-num">0</span> pistas seleccionadas</div>
+    <button class="btn-add-to-playlist" id="btn-open-playlist-picker">☰ AGREGAR A PLAYLIST</button>
+    <button class="btn-clear-selection" id="btn-clear-selection">✕ Limpiar</button>
+</div>
+
+<!-- Playlist Picker Modal -->
+<div id="playlist-picker-modal" class="modal-overlay playlist-picker-modal">
+    <div class="modal">
+        <h3>SELECCIONAR PLAYLIST</h3>
+        <div class="playlist-picker-divider">Tus playlists</div>
+        <div id="playlist-picker-list" class="playlist-picker-list">
+        </div>
+        <div class="playlist-picker-divider">Crear nueva</div>
+        <div class="playlist-picker-create">
+            <input type="text" id="picker-new-name" placeholder="Nombre de la playlist..." />
+            <button class="btn-neon small" id="picker-create-btn">Crear</button>
+        </div>
+        <div class="modal-actions" style="margin-top: 16px;">
+            <button class="btn-neon small" id="picker-cancel-btn">Cancelar</button>
+        </div>
+    </div>
+</div>

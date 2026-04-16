@@ -1,0 +1,61 @@
+@model IEnumerable<FvCore.Models.MediaItem>
+@{
+    ViewData["Title"] = "Favoritos";
+}
+
+<div class="page-header">
+    <h2>FAVORITOS</h2>
+    <div class="page-subtitle">@Model.Count() pistas con Me Gusta</div>
+</div>
+
+@if (Model.Any())
+{
+    <table class="track-list">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Título</th>
+                <th>Artista</th>
+                <th>Álbum</th>
+                <th>Género</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @{ int idx = 0; }
+            @foreach (var track in Model)
+            {
+                idx++;
+                <tr data-track-id="@track.Id"
+                    data-title="@track.Titulo"
+                    data-artist="@(track.Artist?.Nombre ?? "Desconocido")"
+                    data-cover-id="@track.Id">
+                    <td class="track-number">@idx</td>
+                    <td>
+                        <div class="track-title-cell">
+                            <img class="track-cover" src="/cover/@track.Id" alt="" loading="lazy" />
+                            <div class="track-info">
+                                <div class="track-title">@track.Titulo</div>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="track-artist">@(track.Artist?.Nombre ?? "—")</td>
+                    <td style="font-size: 0.75rem; color: var(--text-secondary);">@(track.AlbumName ?? "—")</td>
+                    <td><span class="track-genre">@(track.Genero ?? "—")</span></td>
+                    <td>
+                        <button class="btn-favorite active"
+                                data-media-id="@track.Id" title="Quitar de favoritos">♥</button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+else
+{
+    <div class="empty-state">
+        <div class="empty-icon">♥</div>
+        <div class="empty-text">Aún no tienes favoritos</div>
+        <div class="empty-hint">Haz clic en el ícono ♡ de cualquier pista para agregarla aquí</div>
+    </div>
+}
