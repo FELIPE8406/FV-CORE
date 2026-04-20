@@ -10,6 +10,15 @@
 
 @if (Model.Any())
 {
+    <div style="margin-bottom: 20px; display: flex; gap: 12px;">
+        <button class="btn-neon" onclick="document.querySelectorAll('tr[data-track-id]')[0]?.click()">
+            ▶ REPRODUCIR TODO
+        </button>
+        <button class="btn-neon shuffle-btn" onclick="FvCore.shufflePlay()">
+            🔀 ALEATORIO
+        </button>
+    </div>
+
     <table class="track-list">
         <thead>
             <tr>

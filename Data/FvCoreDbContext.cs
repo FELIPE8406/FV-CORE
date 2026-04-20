@@ -30,10 +30,9 @@ public class FvCoreDbContext : DbContext
             .WithMany(m => m.PlaylistMediaItems)
             .HasForeignKey(pmi => pmi.MediaItemId);
 
-        // Index for fast lookup by path (idempotent scanner)
+        // Index for fast lookup by path
         modelBuilder.Entity<MediaItem>()
-            .HasIndex(m => m.RutaArchivo)
-            .IsUnique();
+            .HasIndex(m => m.RutaArchivo);
 
         // Index for artist name uniqueness
         modelBuilder.Entity<Artist>()
@@ -47,5 +46,10 @@ public class FvCoreDbContext : DbContext
         // Index for media type filtering
         modelBuilder.Entity<MediaItem>()
             .HasIndex(m => m.Tipo);
+
+        // Unique Index for GoogleDriveId
+        modelBuilder.Entity<MediaItem>()
+            .HasIndex(m => m.GoogleDriveId)
+            .IsUnique();
     }
 }

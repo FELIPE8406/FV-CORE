@@ -20,31 +20,31 @@
 
 <!-- Stats Grid -->
 <div class="stats-grid">
-    <div class="stat-card">
+    <a href="@Url.Action("Music", "Media")" class="stat-card" style="text-decoration: none; color: inherit; display: block;">
         <div class="stat-icon">♪</div>
         <div class="stat-value">@totalTracks.ToString("N0")</div>
         <div class="stat-label">Pistas de Audio</div>
-    </div>
-    <div class="stat-card purple">
+    </a>
+    <a href="@Url.Action("Videos", "Media")" class="stat-card purple" style="text-decoration: none; color: inherit; display: block;">
         <div class="stat-icon">▶</div>
         <div class="stat-value">@totalVideos.ToString("N0")</div>
         <div class="stat-label">Videos</div>
-    </div>
-    <div class="stat-card">
+    </a>
+    <a href="@Url.Action("Index", "Artists")" class="stat-card" style="text-decoration: none; color: inherit; display: block;">
         <div class="stat-icon">♫</div>
         <div class="stat-value">@totalArtists.ToString("N0")</div>
         <div class="stat-label">Artistas</div>
-    </div>
-    <div class="stat-card purple">
+    </a>
+    <a href="@Url.Action("Index", "Playlists")" class="stat-card purple" style="text-decoration: none; color: inherit; display: block;">
         <div class="stat-icon">☰</div>
         <div class="stat-value">@totalPlaylists.ToString("N0")</div>
         <div class="stat-label">Playlists</div>
-    </div>
-    <div class="stat-card pink">
+    </a>
+    <a href="@Url.Action("Index", "Favorites")" class="stat-card pink" style="text-decoration: none; color: inherit; display: block;">
         <div class="stat-icon">♥</div>
         <div class="stat-value">@totalFavorites.ToString("N0")</div>
         <div class="stat-label">Favoritos</div>
-    </div>
+    </a>
 </div>
 
 <!-- Top Artists -->

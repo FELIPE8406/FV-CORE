@@ -19,12 +19,15 @@
     <div class="playlist-grid">
         @foreach (var playlist in Model)
         {
-            <a href="@Url.Action("Details", "Playlists", new { id = playlist.Id })" class="playlist-card">
-                <div class="playlist-icon">☰</div>
-                <div class="playlist-name">@playlist.Nombre</div>
-                <div class="playlist-count">@playlist.PlaylistMediaItems.Count pistas</div>
-                <div class="playlist-date">Creada el @playlist.FechaCreacion.ToString("dd MMM, yyyy")</div>
-            </a>
+            <div class="playlist-card-wrap" data-id="@playlist.Id">
+                <a href="@Url.Action("Details", "Playlists", new { id = playlist.Id })" class="playlist-card">
+                    <div class="playlist-icon">☰</div>
+                    <div class="playlist-name">@playlist.Nombre</div>
+                    <div class="playlist-count">@playlist.PlaylistMediaItems.Count pistas</div>
+                    <div class="playlist-date">Creada el @playlist.FechaCreacion.ToString("dd MMM, yyyy")</div>
+                </a>
+                <button class="btn-playlist-menu" onclick="event.preventDefault(); event.stopPropagation(); FvCore.togglePlaylistMenu(this, @playlist.Id, '@playlist.Nombre')">⋮</button>
+            </div>
         }
     </div>
 }
@@ -36,3 +39,22 @@ else
         <div class="empty-hint">Haz clic en "Nueva Playlist" para crear una</div>
     </div>
 }
+
+<!-- Playlist Context Menu Dropdown (Global) -->
+<div id="playlist-context-menu" class="context-dropdown">
+    <button onclick="FvCore.openRenamePlaylistModal()">✏️ Editar nombre</button>
+    <button class="danger" onclick="FvCore.confirmDeletePlaylist()">🗑️ Eliminar playlist</button>
+</div>
+
+<!-- Rename Playlist Modal -->
+<div id="rename-playlist-modal" class="modal-overlay">
+    <div class="modal">
+        <h3>EDITAR PLAYLIST</h3>
+        <input type="text" id="rename-playlist-input" placeholder="Nuevo nombre..." />
+        <div class="modal-actions">
+            <button class="btn-neon small" onclick="FvCore.closeRenamePlaylistModal()">Cancelar</button>
+            <button class="btn-neon small purple" onclick="FvCore.savePlaylistRename()">Guardar</button>
+        </div>
+    </div>
+</div>
+

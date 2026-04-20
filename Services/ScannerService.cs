@@ -1,370 +1,369 @@
-using Microsoft.EntityFrameworkCore;
 using FvCore.Data;
 using FvCore.Models;
+using Google.Apis.Auth.OAuth2;
+using Google.Apis.Drive.v3;
+using Google.Apis.Services;
+using Microsoft.EntityFrameworkCore;
+using System.Text.RegularExpressions;
 
 namespace FvCore.Services;
 
-/// <summary>
-/// Background service that scans the multimedia directory on startup
-/// and indexes all media files into the database.
-/// Idempotent: checks RutaArchivo before inserting to avoid duplicates.
-/// </summary>
 public class ScannerService : IHostedService
 {
-    private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<ScannerService> _logger;
+    private readonly IServiceProvider _serviceProvider;
+    private readonly IConfiguration _configuration;
     private readonly GenreClassifierService _genreClassifier;
+    private bool _isRunning = false;
 
-    // Root media path
-    private const string MediaRoot = @"C:\Users\Usuario\Documents\Felipe Valbuena\Multimedia";
+    private static readonly HashSet<string> ValidExtensions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".wma", ".opus", ".aiff",
+            ".mp4", ".mkv", ".avi", ".webm", ".3gp"
+        };
+    private static readonly string[] ImageExtensions = { ".jpg", ".jpeg", ".png", ".webp" };
 
-    // Supported file extensions
-    private static readonly HashSet<string> AudioExtensions = new(StringComparer.OrdinalIgnoreCase)
+    public ScannerService(ILogger<ScannerService> logger, IServiceProvider serviceProvider, IConfiguration configuration, GenreClassifierService genreClassifier)
     {
-        ".mp3", ".m4a", ".wma", ".flac", ".ogg", ".wav", ".aac"
-    };
-
-    private static readonly HashSet<string> VideoExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".mp4", ".avi", ".mkv", ".flv", ".wmv", ".mov", ".webm"
-    };
-
-    private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".jpg", ".jpeg", ".png", ".bmp", ".webp"
-    };
-
-    // Cover file name patterns (priority order)
-    private static readonly string[] CoverFileNames =
-    {
-        "cover.jpg", "cover.jpeg", "cover.png",
-        "folder.jpg", "folder.jpeg", "folder.png",
-        "front.jpg", "front.jpeg", "front.png",
-        "album.jpg", "album.jpeg", "album.png",
-        "albumart.jpg", "albumartsmall.jpg"
-    };
-
-    public ScannerService(IServiceProvider serviceProvider, ILogger<ScannerService> logger, GenreClassifierService genreClassifier)
-    {
-        _serviceProvider = serviceProvider;
         _logger = logger;
+        _serviceProvider = serviceProvider;
+        _configuration = configuration;
         _genreClassifier = genreClassifier;
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
-    {
-        _logger.LogInformation("╔══════════════════════════════════════════╗");
-        _logger.LogInformation("║   FV-CORE Scanner Service Starting...   ║");
-        _logger.LogInformation("╚══════════════════════════════════════════╝");
-        _logger.LogInformation("Scanning: {Path}", MediaRoot);
+    public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-        if (!Directory.Exists(MediaRoot))
+    public async Task SyncAsync(bool force = false, CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation("SYNC INICIADO");
+        if (_isRunning)
         {
-            _logger.LogError("Media root directory not found: {Path}", MediaRoot);
+            _logger.LogWarning("SYNC BLOQUEADO: ya hay uno en ejecución");
             return;
         }
 
-        using var scope = _serviceProvider.CreateScope();
-        var context = scope.ServiceProvider.GetRequiredService<FvCoreDbContext>();
+        try
+        {
+            _isRunning = true;
+            _logger.LogInformation("╔══════════════════════════════════════════╗");
+            _logger.LogInformation("║   FV-CORE Scanner Service (Master Fix)   ║");
+            _logger.LogInformation("╚══════════════════════════════════════════╝");
+            
+            var credPath = _configuration["GoogleDrive:CredentialsPath"];
+            var rootFolderId = _configuration["GoogleDrive:FolderId"];
 
-        // Ensure database is created
-        await context.Database.MigrateAsync(cancellationToken);
+            _logger.LogInformation("CredPath: {Path}", credPath);
+            _logger.LogInformation("CredFileExists: {Exists}", !string.IsNullOrEmpty(credPath) && File.Exists(credPath));
+            _logger.LogInformation("FolderId: {Id}", rootFolderId);
 
-        // Get existing paths to avoid duplicates
-        var existingPathsList = await context.MediaItems
-            .Select(m => m.RutaArchivo)
-            .ToListAsync(cancellationToken);
-        var existingPaths = new HashSet<string>(existingPathsList);
+            if (string.IsNullOrEmpty(credPath) || !File.Exists(credPath) || string.IsNullOrEmpty(rootFolderId))
+            {
+                _logger.LogError("Configuración de Drive inválida. Abortando.");
+                return;
+            }
 
-        var existingArtists = await context.Artists
-            .ToDictionaryAsync(a => a.Nombre, a => a, StringComparer.OrdinalIgnoreCase, cancellationToken);
+            using var scope = _serviceProvider.CreateScope();
+            var context = scope.ServiceProvider.GetRequiredService<FvCoreDbContext>();
+            await EnsureDatabaseIntegrity(context, cancellationToken);
 
-        int newTracks = 0;
-        int newArtists = 0;
-        int newVideos = 0;
+            _logger.LogInformation("Intentando autenticación con Google Drive...");
+            var jsonCreds = await File.ReadAllTextAsync(credPath, cancellationToken);
+            var credential = GoogleCredential.FromJson(jsonCreds).CreateScoped(DriveService.Scope.DriveReadonly);
+            var driveService = new DriveService(new BaseClientService.Initializer { HttpClientInitializer = credential, ApplicationName = "FvCore Scanner" });
 
-        var topLevelDirs = Directory.GetDirectories(MediaRoot);
+            _logger.LogInformation("Iniciando Escaneo Recursivo Total (DFS)...");
+            
+            var allEntries = new List<DriveEntry>();
+            _logger.LogInformation("Antes de FetchRecursive...");
+            await FetchRecursive(driveService, rootFolderId, new List<string>(), allEntries, cancellationToken);
+            _logger.LogInformation("TOTAL FILES ENCONTRADOS: {Count}", allEntries.Count);
 
-        foreach (var dir in topLevelDirs)
+        var skipped = new List<string>();
+
+        var mediaEntries = allEntries.Where(e =>
+        {
+            var valid = IsValidMedia(e.File);
+
+            if (!valid)
+                skipped.Add(e.File.Name);
+
+            return valid;
+
+        }).ToList();
+
+        _logger.LogInformation(
+            "FILES TOTAL: {Total} | MEDIA: {Media} | FILTRADOS: {Filtered}",
+            allEntries.Count,
+            mediaEntries.Count,
+            skipped.Count
+        );     
+     
+        if (mediaEntries.Count == 0)
+        {
+            _logger.LogWarning("SYNC VACÍO — NO SE TOCA DB");
+            return;
+        }
+
+        var existingItems = await context.MediaItems
+            .Where(m => m.GoogleDriveId != null)
+            .ToDictionaryAsync(m => m.GoogleDriveId!, m => m, cancellationToken);
+            
+        var existingArtists = await context.Artists.ToDictionaryAsync(a => a.Nombre, a => a, StringComparer.OrdinalIgnoreCase, cancellationToken);
+
+        int inserted = 0, updated = 0, batchCount = 0;
+
+        foreach (var entry in mediaEntries)
         {
             if (cancellationToken.IsCancellationRequested) break;
 
-            var dirName = Path.GetFileName(dir);
-            var subDirs = Directory.GetDirectories(dir);
-            var directFiles = Directory.GetFiles(dir);
+            var file = entry.File;
+            var pathParts = entry.PathParts; // Hierarchy excluding filename
 
-            // Check if this is the "Peliculas" folder (special case: videos)
-            if (dirName.Equals("Peliculas", StringComparison.OrdinalIgnoreCase))
+            // Filter junk folders like CD1, Disc 2, etc.
+            var cleanPaths = pathParts
+                .Where(p => !Regex.IsMatch(p, @"^(cd|disc)\s*\d+$", RegexOptions.IgnoreCase))
+                .ToList();
+
+            string finalAlbum, finalArtist;
+            if (cleanPaths.Count == 1)
             {
-                newVideos += ScanVideosFolder(dir, context, existingPaths, cancellationToken);
-                continue;
+                finalArtist = cleanPaths[0];
+                finalAlbum = "Singles";
             }
-
-            // Determine pattern: artist (has subdirs) or standalone album (only files)
-            bool hasSubDirs = subDirs.Length > 0;
-            bool hasMediaFiles = directFiles.Any(f => IsMediaFile(f));
-
-            if (hasSubDirs)
+            else
             {
-                // Pattern: Artist folder with album subdirectories
-                var artist = await GetOrCreateArtist(dirName, dir, context, existingArtists);
-                if (!existingArtists.ContainsKey(artist.Nombre))
-                {
-                    existingArtists[artist.Nombre] = artist;
-                    newArtists++;
-                }
-
-                foreach (var albumDir in subDirs)
-                {
-                    var albumName = Path.GetFileName(albumDir);
-                    var coverPath = FindCoverImage(albumDir);
-
-                    // Set artist photo from first album cover if not set
-                    if (string.IsNullOrEmpty(artist.FotoUrl) && coverPath != null)
-                    {
-                        artist.FotoUrl = coverPath;
-                    }
-
-                    var albumFiles = Directory.GetFiles(albumDir);
-                    foreach (var filePath in albumFiles)
-                    {
-                        if (cancellationToken.IsCancellationRequested) break;
-                        if (!IsAudioFile(filePath) || existingPaths.Contains(filePath)) continue;
-
-                        var mediaItem = CreateMediaItem(filePath, albumName, coverPath, artist, MediaType.Audio);
-                        context.MediaItems.Add(mediaItem);
-                        existingPaths.Add(filePath);
-                        newTracks++;
-                    }
-                }
-
-                // Also scan direct files in artist folder (loose tracks)
-                foreach (var filePath in directFiles)
-                {
-                    if (!IsAudioFile(filePath) || existingPaths.Contains(filePath)) continue;
-
-                    var coverPath = FindCoverImage(dir);
-                    var mediaItem = CreateMediaItem(filePath, dirName, coverPath, artist, MediaType.Audio);
-                    context.MediaItems.Add(mediaItem);
-                    existingPaths.Add(filePath);
-                    newTracks++;
-                }
+                finalAlbum = cleanPaths.LastOrDefault() ?? "Unknown";
+                finalArtist = cleanPaths.Count >= 2 ? cleanPaths[cleanPaths.Count - 2] : "Unknown";
             }
-            else if (hasMediaFiles)
+            var finalTitle = string.IsNullOrWhiteSpace(file.Name) ? "Unknown" : CleanTrackTitle(Path.GetFileNameWithoutExtension(file.Name));
+
+            _logger.LogInformation("[SYNC] Identified: {Title} | Artist: {Artist} | Album: {Album}", finalTitle, finalArtist, finalAlbum);
+            
+            bool isVideo = IsVideoFile(file);
+            var type = isVideo ? MediaType.Video : MediaType.Audio;
+                        
+            if (existingItems.TryGetValue(file.Id, out var item))
             {
-                // Pattern: Standalone album folder (no subdirectories, files directly)
-                var artistName = ExtractArtistFromAlbumFolder(dirName);
-                var artist = await GetOrCreateArtist(artistName, dir, context, existingArtists);
-                if (!existingArtists.ContainsKey(artist.Nombre))
-                {
-                    existingArtists[artist.Nombre] = artist;
-                    newArtists++;
-                }
+                if (!force && item.AlbumName == finalAlbum && item.ArtistName == finalArtist && item.Titulo == finalTitle) continue;
 
-                var coverPath = FindCoverImage(dir);
-                if (string.IsNullOrEmpty(artist.FotoUrl) && coverPath != null)
-                {
-                    artist.FotoUrl = coverPath;
-                }
-
-                foreach (var filePath in directFiles)
-                {
-                    if (!IsAudioFile(filePath) || existingPaths.Contains(filePath)) continue;
-
-                    var mediaItem = CreateMediaItem(filePath, dirName, coverPath, artist, MediaType.Audio);
-                    context.MediaItems.Add(mediaItem);
-                    existingPaths.Add(filePath);
-                    newTracks++;
-                }
+                item.Titulo = finalTitle;
+                item.AlbumName = finalAlbum;
+                item.ArtistName = finalArtist;
+                updated++;
             }
-
-            // Batch save every artist folder to avoid huge memory usage
-            if (context.ChangeTracker.Entries().Count() > 100)
+            else
             {
-                await context.SaveChangesAsync(cancellationToken);
-            }
-        }
-
-        await context.SaveChangesAsync(cancellationToken);
-
-        _logger.LogInformation("╔══════════════════════════════════════════╗");
-        _logger.LogInformation("║   FV-CORE Scan Complete                 ║");
-        _logger.LogInformation("║   New Artists: {Artists,-25}║", newArtists);
-        _logger.LogInformation("║   New Tracks:  {Tracks,-25}║", newTracks);
-        _logger.LogInformation("║   New Videos:  {Videos,-25}║", newVideos);
-        _logger.LogInformation("╚══════════════════════════════════════════╝");
-    }
-
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
-    private Task<int> ScanVideosFolderAsync(string videosPath, FvCoreDbContext context, HashSet<string> existingPaths, CancellationToken ct)
-    {
-        return Task.FromResult(ScanVideosFolder(videosPath, context, existingPaths, ct));
-    }
-
-    private int ScanVideosFolder(string videosPath, FvCoreDbContext context, HashSet<string> existingPaths, CancellationToken ct)
-    {
-        int count = 0;
-        var videoDirs = Directory.GetDirectories(videosPath);
-
-        foreach (var movieDir in videoDirs)
-        {
-            var movieName = Path.GetFileName(movieDir);
-            var files = Directory.GetFiles(movieDir, "*.*", SearchOption.AllDirectories);
-
-            foreach (var filePath in files)
-            {
-                if (ct.IsCancellationRequested) break;
-                if (!IsVideoFile(filePath) || existingPaths.Contains(filePath)) continue;
-
-                var coverPath = FindCoverImage(Path.GetDirectoryName(filePath) ?? movieDir);
-
-                var mediaItem = new MediaItem
+                if (!existingArtists.TryGetValue(finalArtist, out var artistObj))
                 {
-                    Titulo = Path.GetFileNameWithoutExtension(filePath),
-                    RutaArchivo = filePath,
-                    Tipo = MediaType.Video,
-                    AlbumName = movieName,
-                    CoverPath = coverPath,
-                    Genero = "Video",
-                    Calidad = GuessVideoQuality(filePath),
+                    artistObj = new Artist { Nombre = finalArtist };
+                    context.Artists.Add(artistObj);
+                    await context.SaveChangesAsync(cancellationToken); 
+                    existingArtists[finalArtist] = artistObj;
+                }
+
+                var newItem = new MediaItem
+                {
+                    Titulo = finalTitle,
+                    RutaArchivo = string.Join("/", pathParts) + "/" + file.Name,
+                    GoogleDriveId = file.Id,
+                    Tipo = type,
+                    AlbumName = finalAlbum,
+                    ArtistName = finalArtist,
+                    ArtistId = artistObj.Id,
+                    Artist = artistObj,
+                    Genero = isVideo ? "Video" : _genreClassifier.GetGenreFromAI(file.Name, finalArtist, finalAlbum),
+                    Calidad = type == MediaType.Audio ? GuessAudioQuality(file.Size) : GuessVideoQuality(file.Size),
                     IsFavorite = false
                 };
-
-                context.MediaItems.Add(mediaItem);
-                existingPaths.Add(filePath);
-                count++;
+                context.MediaItems.Add(newItem);
+                inserted++;
+            }           
+            batchCount++;
+            if (batchCount >= 200)
+            {
+                await context.SaveChangesAsync(cancellationToken);
+                _logger.LogInformation("[SYNC] Batch saved ({Count} items)...", batchCount);
+                batchCount = 0;
             }
         }
 
-        return count;
-    }
-
-    private MediaItem CreateMediaItem(string filePath, string? albumName, string? coverPath, Artist artist, MediaType type)
-    {
-        var fileName = Path.GetFileNameWithoutExtension(filePath);
-        var genre = _genreClassifier.GetGenreFromAI(fileName, artist.Nombre, albumName);
-
-        return new MediaItem
+        if (batchCount > 0)
         {
-            Titulo = CleanTrackTitle(fileName),
-            RutaArchivo = filePath,
-            Tipo = type,
-            AlbumName = albumName,
-            CoverPath = coverPath,
-            Genero = genre,
-            Calidad = type == MediaType.Audio ? GuessAudioQuality(filePath) : GuessVideoQuality(filePath),
-            ArtistId = artist.Id,
-            Artist = artist,
-            IsFavorite = false
-        };
-    }
-
-    private async Task<Artist> GetOrCreateArtist(string name, string dirPath, FvCoreDbContext context, Dictionary<string, Artist> cache)
-    {
-        if (cache.TryGetValue(name, out var existing))
-            return existing;
-
-        var artist = new Artist
-        {
-            Nombre = name,
-            FotoUrl = FindCoverImage(dirPath)
-        };
-
-        context.Artists.Add(artist);
-        await context.SaveChangesAsync();
-        cache[name] = artist;
-        return artist;
-    }
-
-    private static string? FindCoverImage(string directoryPath)
-    {
-        if (!Directory.Exists(directoryPath)) return null;
-
-        // Check known cover file names first
-        foreach (var coverName in CoverFileNames)
-        {
-            var coverPath = Path.Combine(directoryPath, coverName);
-            if (File.Exists(coverPath))
-                return coverPath;
+            await context.SaveChangesAsync(cancellationToken);
         }
 
-        // Fallback: first image file in directory
+        _logger.LogInformation("NUEVOS: {Inserted} | ACTUALIZADOS: {Updated}", inserted, updated);
+    }
+    finally
+    {
+        _isRunning = false;
+        _logger.LogInformation("SYNC FINALIZADO");
+    }
+}
+
+    private async Task FetchRecursive(DriveService service, string folderId, List<string> currentPath, List<DriveEntry> results, CancellationToken ct)
+    {
+        _logger.LogInformation("Escaneando carpeta: {Path}", string.Join("/", currentPath));
+        
+        string? pageToken = null;
+        try 
+        {
+            do
+            {
+                var request = service.Files.List();
+                request.Q = $"'{folderId}' in parents and trashed = false";
+                request.Fields = "nextPageToken, files(id, name, mimeType, size)";
+                request.PageToken = pageToken;
+                request.PageSize = 1000;
+                request.SupportsAllDrives = true;
+                request.IncludeItemsFromAllDrives = true;
+
+                var response = await request.ExecuteAsync(ct);
+                if (response.Files != null)
+                {
+                    foreach (var file in response.Files)
+                    {
+                        if (file.MimeType == "application/vnd.google-apps.folder")
+                        {
+                            var newPath = new List<string>(currentPath) { file.Name };
+                            await FetchRecursive(service, file.Id, newPath, results, ct);
+                        }
+                        else if (file.MimeType == "application/vnd.google-apps.shortcut")
+                        {
+                            var shortcutDetails = file.ShortcutDetails;
+
+                            if (shortcutDetails?.TargetId != null)
+                            {
+                                var target = await service.Files.Get(shortcutDetails.TargetId).ExecuteAsync(ct);
+
+                                if (target.MimeType == "application/vnd.google-apps.folder")
+                                {
+                                    var newPath = new List<string>(currentPath) { target.Name };
+                                    await FetchRecursive(service, target.Id, newPath, results, ct);
+                                }
+                                else
+                                {
+                                    results.Add(new DriveEntry
+                                    {
+                                        File = target,
+                                        PathParts = currentPath
+                                    });
+                                }
+                            }
+                        }
+                        else
+                        {
+                            _logger.LogInformation(" - File: {Name} ({Size} bytes)", file.Name, file.Size);
+                            results.Add(new DriveEntry { File = file, PathParts = currentPath });
+                        }
+                    }
+                }
+                pageToken = response.NextPageToken;
+            } while (pageToken != null && !ct.IsCancellationRequested);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError("Error en carpeta {Id}: {Msg}", folderId, ex.Message);
+        }
+    }
+
+    private bool IsValidMedia(Google.Apis.Drive.v3.Data.File file)
+    {
+        if (string.IsNullOrWhiteSpace(file.Name)) return false;
+
+        // Normalización con null-safety y manejo de edge cases
+        var ext = Path.GetExtension(file.Name)?.Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(ext) || ext == ".")
+        {
+            ext = null;
+        }
+
+        // 1. Prioridad: Filtro por extensión
+        if (!string.IsNullOrEmpty(ext) && ValidExtensions.Contains(ext))
+        {
+            return true;
+        }
+
+        // 2. Fallback: MIME type SOLO si no hay extensión
+        if (string.IsNullOrEmpty(ext))
+        {
+            if (file.MimeType?.StartsWith("audio/") == true || file.MimeType?.StartsWith("video/") == true)
+            {
+                return true;
+            }
+        }
+
+        // 3. Log de archivos filtrados con contexto real
+        _logger.LogWarning("[FILTERED] {Name} | Ext: {Ext} | Mime: {Mime}", file.Name, ext ?? "None", file.MimeType ?? "Unknown");
+        return false;
+    }
+
+    private bool IsVideoFile(Google.Apis.Drive.v3.Data.File file)
+    {
+        var ext = Path.GetExtension(file.Name)?.Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(ext) || ext == ".")
+        {
+            ext = null;
+        }
+
+        if (ext != null && (ext == ".mp4" || ext == ".webm" || ext == ".mkv" || ext == ".avi" || ext == ".3gp"))
+        {
+            return true;
+        }
+
+        return string.IsNullOrEmpty(ext) && file.MimeType?.StartsWith("video/") == true;
+    }
+
+    private class DriveEntry
+    {
+        public Google.Apis.Drive.v3.Data.File File { get; set; } = null!;
+        public List<string> PathParts { get; set; } = new();
+    }
+
+    private async Task EnsureDatabaseIntegrity(FvCoreDbContext context, CancellationToken ct)
+    {
         try
         {
-            var firstImage = Directory.GetFiles(directoryPath)
-                .FirstOrDefault(f => ImageExtensions.Contains(Path.GetExtension(f)));
-            return firstImage;
+            await context.Database.ExecuteSqlRawAsync(@"
+                IF NOT EXISTS (SELECT name FROM sys.indexes WHERE name = 'IX_MediaItems_GoogleDriveId_Unique') 
+                BEGIN
+                    CREATE UNIQUE NONCLUSTERED INDEX [IX_MediaItems_GoogleDriveId_Unique] 
+                    ON [dbo].[MediaItems] ([GoogleDriveId]) WHERE [GoogleDriveId] IS NOT NULL;
+                END
+                
+                IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'MediaItems' AND COLUMN_NAME = 'ArtistName')
+                BEGIN
+                    ALTER TABLE MediaItems ADD ArtistName NVARCHAR(300) NULL;
+                END
+            ", ct);
         }
-        catch
-        {
-            return null;
-        }
+        catch { }
     }
 
-    /// <summary>
-    /// Extracts artist name from standalone album folder names.
-    /// Patterns: "1986 - The Final Countdown" → "The Final Countdown"
-    ///           "Depeche Mode Violator" → "Depeche Mode Violator"
-    /// </summary>
-    private static string ExtractArtistFromAlbumFolder(string folderName)
+    private static string CleanTrackTitle(string title)
     {
-        // Pattern: "Year - Album Name" → use Album Name as artist
-        var yearPattern = System.Text.RegularExpressions.Regex.Match(folderName, @"^\d{4}\s*[-–]\s*(.+)$");
-        if (yearPattern.Success)
-            return yearPattern.Groups[1].Value.Trim();
-
-        // Pattern: "Artist - Year - Album" → use Artist
-        var artistYearPattern = System.Text.RegularExpressions.Regex.Match(folderName, @"^(.+?)\s*[-–]\s*\d{4}");
-        if (artistYearPattern.Success)
-            return artistYearPattern.Groups[1].Value.Trim();
-
-        return folderName;
+        title = Regex.Replace(title, @"^\d{1,2}\s*-\s*", "");
+        title = Regex.Replace(title, @"\([^)]*\)", "").Trim();
+        title = Regex.Replace(title, @"\[[^\]]*\]", "").Trim();
+        return string.IsNullOrWhiteSpace(title) ? "Unknown" : title;
     }
 
-    /// <summary>
-    /// Cleans track titles by removing common prefixes like "01 - ", "Track 01", etc.
-    /// </summary>
-    private static string CleanTrackTitle(string fileName)
+    private static string GuessAudioQuality(long? sizeBytes)
     {
-        // Remove "01 - " or "01. " prefixes
-        var cleaned = System.Text.RegularExpressions.Regex.Replace(fileName, @"^\d{1,3}\s*[-–.]\s*", "");
-        // Remove "Copia de " prefix
-        cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, @"^Copia de\s+", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        return string.IsNullOrWhiteSpace(cleaned) ? fileName : cleaned.Trim();
+        if (sizeBytes == null) return "320kbps";
+        var mb = sizeBytes.Value / 1024 / 1024;
+        if (mb > 20) return "FLAC";
+        if (mb > 10) return "320kbps";
+        return "128kbps";
     }
 
-    private static string GuessAudioQuality(string filePath)
+    private static string GuessVideoQuality(long? sizeBytes)
     {
-        try
-        {
-            var fileInfo = new FileInfo(filePath);
-            var sizeKb = fileInfo.Length / 1024.0;
-            // Very rough estimate: MP3 at 320kbps ≈ 2.4MB per minute
-            // At 128kbps ≈ 1MB per minute
-            return sizeKb > 5000 ? "320kbps" : sizeKb > 3000 ? "256kbps" : sizeKb > 1500 ? "192kbps" : "128kbps";
-        }
-        catch
-        {
-            return "128kbps";
-        }
+        if (sizeBytes == null) return "1080p";
+        var mb = sizeBytes.Value / 1024 / 1024;
+        if (mb > 1000) return "4K";
+        if (mb > 300) return "1080p";
+        return "720p";
     }
-
-    private static string GuessVideoQuality(string filePath)
-    {
-        try
-        {
-            var fileInfo = new FileInfo(filePath);
-            var sizeMb = fileInfo.Length / (1024.0 * 1024.0);
-            return sizeMb > 4000 ? "1080p" : sizeMb > 1500 ? "720p" : sizeMb > 500 ? "480p" : "360p";
-        }
-        catch
-        {
-            return "SD";
-        }
-    }
-
-    private static bool IsAudioFile(string filePath) => AudioExtensions.Contains(Path.GetExtension(filePath));
-    private static bool IsVideoFile(string filePath) => VideoExtensions.Contains(Path.GetExtension(filePath));
-    private static bool IsMediaFile(string filePath) => IsAudioFile(filePath) || IsVideoFile(filePath);
 }

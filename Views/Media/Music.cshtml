@@ -1,99 +1,108 @@
 @model IEnumerable<FvCore.Models.MediaItem>
 @{
     ViewData["Title"] = "Música";
-    var genres = ViewBag.Genres as List<string>;
-    var currentGenre = ViewBag.Genre as string;
     var page = (int)ViewBag.Page;
     var totalPages = (int)ViewBag.TotalPages;
     var totalItems = (int)ViewBag.TotalItems;
 }
 
-<div class="page-header">
-    <h2>MÚSICA</h2>
-    <div class="page-subtitle">@totalItems.ToString("N0") pistas en la biblioteca</div>
+<div class="music-hero">
+    <div class="music-hero-inner">
+        <h1 class="music-hero-title">Explora tu música</h1>
+        <p class="music-hero-subtitle">@totalItems.ToString("N0") pistas en tu biblioteca personal</p>
+        
+        <form method="get" class="music-search-form">
+            <div class="music-search-wrapper">
+                <span class="music-search-icon">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    </svg>
+                </span>
+                <input type="text" name="search" id="search-input" value="@ViewBag.Search"
+                       placeholder="Buscar canciones, artistas..." autocomplete="off" class="music-search-input" />
+                @if (!string.IsNullOrEmpty(ViewBag.Search))
+                {
+                    <a href="@Url.Action("Music", "Media")" class="music-search-clear" title="Limpiar búsqueda">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </a>
+                }
+            </div>
+        </form>
+    </div>
 </div>
 
-<form method="get" class="search-bar">
-    <input type="text" name="search" id="search-input" value="@ViewBag.Search"
-           placeholder="Buscar pistas o artistas..." autocomplete="off" />
-    <input type="hidden" name="genre" value="@currentGenre" />
-    <button type="submit">⌕</button>
-</form>
-
-<!-- Genre Filter -->
-@if (genres != null && genres.Any())
-{
-    <div class="genre-filters">
-        <a href="@Url.Action("Music", "Media", new { search = ViewBag.Search })"
-           class="genre-pill @(string.IsNullOrEmpty(currentGenre) ? "active" : "")">Todos</a>
-        @foreach (var genre in genres)
-        {
-            <a href="@Url.Action("Music", "Media", new { search = ViewBag.Search, genre = genre })"
-               class="genre-pill @(currentGenre == genre ? "active" : "")">@genre</a>
-        }
-    </div>
+@{
+    var safeModel = Model ?? new List<FvCore.Models.MediaItem>();
 }
+<script>
+    if (!Array.isArray(window.__GLOBAL_TRACK_STORE)) {
+        window.__GLOBAL_TRACK_STORE = [];
+    }
 
-@if (Model.Any())
+    window.__GLOBAL_TRACK_STORE = @Html.Raw(
+        System.Text.Json.JsonSerializer.Serialize(
+            safeModel.Select(x => new {
+                id = x.Id.ToString(),
+                title = string.IsNullOrWhiteSpace(x.Titulo) ? "Unknown" : x.Titulo,
+                artist = string.IsNullOrWhiteSpace(x.ArtistName) ? "Unknown" : x.ArtistName,
+                album = string.IsNullOrWhiteSpace(x.AlbumName) ? "Unknown" : x.AlbumName,
+                genre = x.Genero ?? "Unknown",
+                quality = x.Calidad ?? "Unknown",
+                coverId = x.Id.ToString()
+            })
+        )
+    );
+</script>
+
+@if (safeModel.Any())
 {
-    <div style="margin-bottom: 16px;">
-        <button class="btn-neon shuffle-btn" onclick="FvCore.shufflePlay()">
+
+    <div style="margin-bottom: 24px; display: flex; justify-content: flex-start; align-items: center;">
+        <button class="btn-neon shuffle-btn" onclick="if(window.FvCore) FvCore.shufflePlay()">
             🔀 REPRODUCCIÓN ALEATORIA
         </button>
     </div>
-    <table class="track-list" id="music-track-list">
-        <thead>
-            <tr>
-                <th class="track-select-cell">
-                    <input type="checkbox" class="track-checkbox" id="select-all-music" title="Seleccionar todo" />
-                </th>
-                <th>#</th>
-                <th>Título</th>
-                <th>Artista</th>
-                <th>Álbum</th>
-                <th>Género</th>
-                <th>Calidad</th>
-                <th></th>
-            </tr>
-        </thead>
-        <tbody>
-            @{ int idx = (page - 1) * 50; }
-            @foreach (var track in Model)
-            {
-                idx++;
-                <tr data-track-id="@track.Id"
-                    data-title="@track.Titulo"
-                    data-artist="@(track.Artist?.Nombre ?? "Desconocido")"
-                    data-cover-id="@track.Id">
-                    <td class="track-select-cell">
-                        <input type="checkbox" class="track-checkbox track-select-cb" data-id="@track.Id" />
-                    </td>
-                    <td class="track-number">@idx</td>
-                    <td>
-                        <div class="track-title-cell">
-                            <img class="track-cover" src="/cover/@track.Id" alt="" loading="lazy" />
-                            <div class="track-info">
-                                <div class="track-title">@track.Titulo</div>
-                            </div>
-                        </div>
-                    </td>
-                    <td class="track-artist">@(track.Artist?.Nombre ?? "—")</td>
-                    <td style="font-size: 0.75rem; color: var(--text-secondary);">@(track.AlbumName ?? "—")</td>
-                    <td><span class="track-genre">@(track.Genero ?? "—")</span></td>
-                    <td class="track-quality">@(track.Calidad ?? "—")</td>
-                    <td>
-                        <div class="track-actions">
-                            <button class="btn-quick-add" data-media-id="@track.Id" title="Agregar a playlist">+</button>
-                            <button class="btn-favorite @(track.IsFavorite ? "active" : "")"
-                                    data-media-id="@track.Id" title="Favorito">
-                                @(track.IsFavorite ? "♥" : "♡")
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-            }
-        </tbody>
-    </table>
+    
+    <div id="music-track-list">
+        @{ int globalIndexOffset = (page - 1) * 50; }
+        @foreach (var albumGroup in safeModel.GroupBy(m => new { 
+            Album = string.IsNullOrWhiteSpace(m.AlbumName) ? "Unknown" : m.AlbumName, 
+            Artist = string.IsNullOrWhiteSpace(m.ArtistName) ? "Unknown" : m.ArtistName 
+        }))
+        {
+            string hash = Guid.NewGuid().ToString("N").Substring(0, 8);
+            var firstTrack = albumGroup.First();
+            int trackCount = albumGroup.Count();
+            
+            string displayAlbum = string.Equals(albumGroup.Key.Album?.Trim(), "Unknown", StringComparison.OrdinalIgnoreCase) ? "Sencillos" : albumGroup.Key.Album;
+            string displayArtist = string.Equals(albumGroup.Key.Artist?.Trim(), "Unknown", StringComparison.OrdinalIgnoreCase) ? "" : albumGroup.Key.Artist;
+            
+            <div class="album-accordion-header ui-glass-card" data-album="@albumGroup.Key.Album" data-artist="@albumGroup.Key.Artist" data-body-id="body-@hash" data-offset="@globalIndexOffset">
+                <div class="album-accordion-info">
+                    <img class="album-accordion-cover" src="/cover/@firstTrack.Id" alt="" loading="lazy" />
+                    <div class="album-accordion-text">
+                        <div class="album-accordion-title">@displayAlbum</div>
+                        @if(!string.IsNullOrEmpty(displayArtist))
+                        {
+                            <div class="album-accordion-artist">@displayArtist</div>
+                        }
+                    </div>
+                </div>
+                <div class="album-accordion-meta">
+                    <div class="album-accordion-count">@trackCount pistas</div>
+                    <svg class="album-accordion-chevron" viewBox="0 0 24 24">
+                        <path d="M6 9l6 6 6-6"/>
+                    </svg>
+                </div>
+            </div>
+            
+            <div class="album-accordion-body" id="body-@hash" data-loaded="false">
+                <!-- Lazy rendered via JS -->
+            </div>
+            globalIndexOffset += trackCount;
+        }
+    </div>
 
     <!-- Pagination -->
     @if (totalPages > 1)
@@ -101,7 +110,7 @@
         <div class="pagination">
             @if (page > 1)
             {
-                <a href="@Url.Action("Music", "Media", new { search = ViewBag.Search, genre = currentGenre, page = page - 1 })">← Anterior</a>
+                <a href="@Url.Action("Music", "Media", new { search = ViewBag.Search, page = page - 1 })">← Anterior</a>
             }
 
             @for (int p = Math.Max(1, page - 3); p <= Math.Min(totalPages, page + 3); p++)
@@ -112,13 +121,13 @@
                 }
                 else
                 {
-                    <a href="@Url.Action("Music", "Media", new { search = ViewBag.Search, genre = currentGenre, page = p })">@p</a>
+                    <a href="@Url.Action("Music", "Media", new { search = ViewBag.Search, page = p })">@p</a>
                 }
             }
 
             @if (page < totalPages)
             {
-                <a href="@Url.Action("Music", "Media", new { search = ViewBag.Search, genre = currentGenre, page = page + 1 })">Siguiente →</a>
+                <a href="@Url.Action("Music", "Media", new { search = ViewBag.Search, page = page + 1 })">Siguiente →</a>
             }
         </div>
     }
@@ -128,7 +137,7 @@ else
     <div class="empty-state">
         <div class="empty-icon">♪</div>
         <div class="empty-text">No se encontraron pistas</div>
-        <div class="empty-hint">Intenta ajustar tu búsqueda o filtro de género</div>
+        <div class="empty-hint">Intenta ajustar tu búsqueda</div>
     </div>
 }
 

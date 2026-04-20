@@ -20,6 +20,9 @@ public class MediaItem
     [Required, MaxLength(1000)]
     public string RutaArchivo { get; set; } = string.Empty;
 
+    [MaxLength(200)]
+    public string? GoogleDriveId { get; set; }
+
     public TimeSpan? Duracion { get; set; }
 
     [MaxLength(100)]
@@ -34,6 +37,9 @@ public class MediaItem
 
     [MaxLength(300)]
     public string? AlbumName { get; set; }
+
+    [MaxLength(300)]
+    public string? ArtistName { get; set; }
 
     [MaxLength(1000)]
     public string? CoverPath { get; set; }

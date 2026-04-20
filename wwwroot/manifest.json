@@ -1,0 +1,21 @@
+{
+  "name": "FV Music",
+  "short_name": "FV",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#00ff88",
+  "icons": [
+    {
+      "src": "/icons/fv-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/fv-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

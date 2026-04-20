@@ -53,10 +53,9 @@
                     <td class="track-artist">@(track.Artist?.Nombre ?? "—")</td>
                     <td><span class="track-genre">@(track.Genero ?? "—")</span></td>
                     <td>
-                        <button class="btn-favorite @(track.IsFavorite ? "active" : "")"
-                                data-media-id="@track.Id" title="Favorito">
-                            @(track.IsFavorite ? "♥" : "♡")
-                        </button>
+                        <div class="track-actions">
+                            <button class="btn-context-menu" data-context="playlist" data-playlist-id="@Model.Id" title="Más opciones">⋯</button>
+                        </div>
                     </td>
                 </tr>
             }

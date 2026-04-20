@@ -5,7 +5,10 @@
 }
 
 <div class="page-header">
-    <h2>@Model.Nombre.ToUpper()</h2>
+    <div style="display: flex; align-items: center; gap: 16px;">
+        <button id="btn-back" class="btn-back" title="Volver a la vista anterior">← Volver</button>
+        <h2>@Model.Nombre.ToUpper()</h2>
+    </div>
     <div class="page-subtitle">@Model.MediaItems.Count pistas • @(albums?.Count ?? 0) álbumes</div>
 </div>
 
@@ -79,11 +82,7 @@
                             <td class="track-quality">@(track.Calidad ?? "—")</td>
                             <td>
                                 <div class="track-actions">
-                                    <button class="btn-quick-add" data-media-id="@track.Id" title="Agregar a playlist">+</button>
-                                    <button class="btn-favorite @(track.IsFavorite ? "active" : "")"
-                                            data-media-id="@track.Id" title="Favorito">
-                                        @(track.IsFavorite ? "♥" : "♡")
-                                    </button>
+                                    <button class="btn-context-menu" title="Más opciones">⋯</button>
                                 </div>
                             </td>
                         </tr>

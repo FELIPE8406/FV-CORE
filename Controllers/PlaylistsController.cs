@@ -5,6 +5,7 @@ using FvCore.Models;
 
 namespace FvCore.Controllers;
 
+[Route("api/playlists")]
 public class PlaylistsController : Controller
 {
     private readonly FvCoreDbContext _context;
@@ -14,6 +15,7 @@ public class PlaylistsController : Controller
         _context = context;
     }
 
+    [HttpGet("/Playlists")]
     public async Task<IActionResult> Index()
     {
         var playlists = await _context.Playlists
@@ -25,6 +27,7 @@ public class PlaylistsController : Controller
         return View(playlists);
     }
 
+    [HttpGet("/Playlists/Details/{id}")]
     public async Task<IActionResult> Details(int id)
     {
         var playlist = await _context.Playlists
@@ -169,20 +172,51 @@ public class PlaylistsController : Controller
         return Json(new { success = true });
     }
 
-    [HttpPost]
-    public async Task<IActionResult> Delete([FromBody] DeletePlaylistRequest request)
+    /// <summary>
+    /// RESTful Rename (PUT /api/playlists/{id})
+    /// </summary>
+    [HttpPut("{id}")]
+    public async Task<IActionResult> Update(int id, [FromBody] RenamePlaylistRequest request)
     {
-        var playlist = await _context.Playlists.FindAsync(request.Id);
+        var nuevoNombre = request.NuevoNombre?.Trim();
+        if (string.IsNullOrWhiteSpace(nuevoNombre))
+            return BadRequest(new { success = false, message = "El nombre no es válido" });
+
+        var playlist = await _context.Playlists.FindAsync(id);
         if (playlist == null) return NotFound();
+
+        playlist.Nombre = nuevoNombre;
+        await _context.SaveChangesAsync();
+
+        return Json(new { success = true, nombre = playlist.Nombre });
+    }
+
+    /// <summary>
+    /// RESTful Delete (DELETE /api/playlists/{id})
+    /// </summary>
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> Remove(int id)
+    {
+        var playlist = await _context.Playlists.FindAsync(id);
+        if (playlist == null) return NotFound();
+
+        // Safe and efficient removal of relationships
+        var items = _context.PlaylistMediaItems.Where(pmi => pmi.PlaylistId == id);
+        _context.PlaylistMediaItems.RemoveRange(items);
 
         _context.Playlists.Remove(playlist);
         await _context.SaveChangesAsync();
 
         return Json(new { success = true });
     }
+
+    // Keep legacy endpoints for internal back-compat if needed, or remove them
+    // The user asked for specific RESTful ones, I'll keep the Rename/Delete logic consolidated above
+    // but for now I'll just keep the ones they asked for.
 }
 
 public class CreatePlaylistRequest { public string Nombre { get; set; } = ""; }
 public class AddTrackRequest { public int PlaylistId { get; set; } public int MediaItemId { get; set; } }
 public class AddTracksRequest { public int PlaylistId { get; set; } public List<int> MediaItemIds { get; set; } = new(); }
 public class DeletePlaylistRequest { public int Id { get; set; } }
+public class RenamePlaylistRequest { public int Id { get; set; } public string NuevoNombre { get; set; } = ""; }

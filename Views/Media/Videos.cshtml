@@ -1,11 +1,17 @@
 @model IEnumerable<FvCore.Models.MediaItem>
 @{
     ViewData["Title"] = "Videos";
+    var page = ViewBag.Page != null ? (int)ViewBag.Page : 1;
+    var totalPages = ViewBag.TotalPages != null ? (int)ViewBag.TotalPages : 1;
+    var totalItems = ViewBag.TotalItems != null ? (int)ViewBag.TotalItems : 0;
 }
 
-<div class="page-header">
-    <h2>VIDEOS</h2>
-    <div class="page-subtitle">@Model.Count() videos en la biblioteca</div>
+<div class="page-header" style="display:flex; justify-content:space-between; align-items:flex-start;">
+    <div>
+        <h2>VIDEOS</h2>
+        <div class="page-subtitle">@totalItems.ToString("N0") videos en la biblioteca</div>
+    </div>
+    <button class="btn-neon small" onclick="window.history.back()">← Volver</button>
 </div>
 
 <form method="get" class="search-bar">
@@ -42,6 +48,33 @@
             </div>
         }
     </div>
+
+    @if (totalPages > 1)
+    {
+        <div class="pagination">
+            @if (page > 1)
+            {
+                <a href="@Url.Action("Videos", "Media", new { search = ViewBag.Search, page = page - 1 })">← Anterior</a>
+            }
+
+            @for (int p = Math.Max(1, page - 3); p <= Math.Min(totalPages, page + 3); p++)
+            {
+                if (p == page)
+                {
+                    <span class="current">@p</span>
+                }
+                else
+                {
+                    <a href="@Url.Action("Videos", "Media", new { search = ViewBag.Search, page = p })">@p</a>
+                }
+            }
+
+            @if (page < totalPages)
+            {
+                <a href="@Url.Action("Videos", "Media", new { search = ViewBag.Search, page = page + 1 })">Siguiente →</a>
+            }
+        </div>
+    }
 }
 else
 {
