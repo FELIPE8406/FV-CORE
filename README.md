@@ -1,51 +1,75 @@
-# FV-CORE
+# FV-CORE: Digital Music Platform
 
-**Plataforma de Streaming Personal**
+FV-CORE es una plataforma de streaming de música y video personal basada en la web, diseñada para la máxima fluidez y rendimiento. Permite sincronizar y reproducir contenido multimedia directamente desde Google Drive con una interfaz moderna y una experiencia de navegación sin interrupciones.
 
-FV-CORE es una plataforma de streaming multimedia local desarrollada con ASP.NET Core MVC (.NET 8). Su objetivo es proporcionar una interfaz unificada, rapida y esteticamente disfrutable (basada en el estilo Cyberpunk) para organizar y reproducir archivos multimedia locales.
+## 🚀 Características Principales
 
-## Caracteristicas Principales
+- **Navegación Fluida (SPA-like)**: Sistema de navegación basado en AJAX que elimina el parpadeo visual. Los cambios de vista son suaves (fade-in/fade-out) y el reproductor de música es persistente.
+- **Sincronización con Google Drive**: Integración robusta con `ScannerService` para indexar contenido de forma recursiva desde una carpeta específica de Google Drive.
+- **Reproductor Persistente**: Control de reproducción global que se mantiene activo durante toda la sesión de navegación.
+- **Gestión de Playlists**: Sistema completo para crear, editar nombres y eliminar listas de reproducción de forma dinámica.
+- **Soporte PWA (iOS Optimized)**: Instalable en iPhone (Add to Home Screen) con soporte para modo *standalone*, iconos de alta resolución y visualización en pantalla completa.
+- **Búsqueda Instantánea**: Filtrado en tiempo real de artistas, álbumes y canciones.
 
-*   **Scanner Automatico al Iniciar:** Servicio en segundo plano que indexa la coleccion de musica y videos de la ruta fisica especificada sin intervencion del usuario.
-*   **Soporte para Multiples Formatos:** Escaneo e identificacion de archivos de audio interactivos (.mp3, .m4a, .wma, .wav, .flac) y video (.mp4, .mkv, .avi, .mov).
-*   **Metadata y Portadas:** Extraccion y vinculacion automatica de imagenes `cover.jpg` o `folder.jpg` en las carpetas. Genera imagenes SVG predeterminadas si no se detecta portada.
-*   **Clasificador de Genero mediante IA:** Servicio integrado que procesa los titulos y artistas para asignar categorias primarias.
-*   **Reproductor de Audio Persistente:** Barra de reproduccion HTML5 ininterrumpida que se mantiene reproduciendo la musica mientras se navega por la interfaz.
-*   **Visor de Video Inline:** Componente integrado para visualizar contenido de video directamente sobre el dashboard.
-*   **Modulo de Listas de Reproduccion (Playlists):**
-    *   Seleccion multiple iterativa de pistas.
-    *   Creacion nativa de colecciones a demanda (via ventana tipo terminal interactiva).
-    *   Adicion rapida y reproducciones parciales.
-*   **Funcionalidad de Reproduccion Aleatoria (Shuffle):** Algoritmo de barajado incorporado para reproducir artistas, listas o librerias enteras al azar.
-*   **Sistema de Favoritos:** Herramienta agil para marcar canciones favoritas y agregarlas instantaneamente a una seleccion de facil acceso.
-*   **Interfaz Grafica Cyberpunk:** Desarrollada sin utilitarios extra de CSS, puramente disenada en vanilla CSS con una profunda integracion de estilizacion dark-mode centrada en acentos Verde Neon y Morado Electrico.
+## 🛠 Tecnologías Usadas
 
-## Requisitos Tecnicos
+- **Backend**: ASP.NET Core 6.0 (MVC)
+- **Base de Datos**: Entity Framework Core con SQL Server
+- **Frontend**: JavaScript Vanilla (ES6+), CSS3 con variables de diseño (Neon Aesthetic)
+- **APIs**: Integración con Google Drive API v3
+- **DevOps**: Registro de Service Workers para soporte PWA
 
-*   .NET 8.0 SDK
-*   SQL Server LocalDB (para la base de datos Entity Framework Core)
-*   Navegador web moderno (Chrome, Firefox, o Edge)
+## 📦 Instalación
 
-## Instrucciones de Instalacion y Ejecucion
+Para configurar una instancia local de FV-CORE, sigue estos pasos:
 
-1.  Abra una terminal (PowerShell o CMD) en el directorio raiz del proyecto.
-2.  Ejecute `dotnet build` para restaurar los paquetes NuGet y compilar la solucion.
-3.  Cree y actualice la base de datos ejecutando los comandos de migracion:
-    *   `dotnet ef migrations add InitialCreate`
-    *   `dotnet ef database update`
-4.  Inicie el servidor web ejecutando:
-    *   `dotnet run`
-5.  La aplicacion estara disponible localmente en `http://localhost:5100`. Al iniciar por primera vez, el Scanner indexara todos los medios que encuentre en el sistema, puede visualizar el estado en la misma ventana de comandos.
+1. **Clonar el repositorio**:
+   ```bash
+   git clone https://github.com/FELIPE8406/FV-CORE.git
+   ```
 
-## Estructura del Proyecto
+2. **Restaurar dependencias**:
+   Asegúrate de tener el SDK de .NET instalado y ejecuta:
+   ```bash
+   dotnet restore
+   ```
 
-*   `/Controllers`: Controladores principales que administran las secciones Home, Artists, Media, Playlists, Favorites, Cover y Streaming.
-*   `/Models`: Dominio de la aplicacion que contiene las entidades MediaItem, Artist y las correlaciones para Playlist.
-*   `/Services`: Contiene el Background Service del scanner de archivos y la implementacion base del clasificador por genero.
-*   `/Data`: Contexto de Base de datos SQL.
-*   `/Views`: HTML Renderizado usando Razor en estetica Neon.
-*   `/wwwroot`: Archivos CSS, JS estaticos e imagenes necesarias para la carga visual.
+3. **Configurar la base de datos**:
+   Actualiza la cadena de conexión en tu archivo de configuración (ver sección de Configuración).
+   Ejecuta las migraciones para crear las tablas necesarias:
+   ```bash
+   dotnet ef database update
+   ```
 
-## Licencia de Uso
+## ⚙️ Configuración
 
-Uso estrictamente personal y local. Proyecto creado por la iniciativa FV-CORE.
+Por razones de seguridad, el archivo de configuración real (`appsettings.json`) está excluido del repositorio. Debes crear uno basado en la plantilla de ejemplo:
+
+1. Localiza el archivo `appsettings.Example.json`.
+2. Renómbralo o cópialo como `appsettings.json`.
+3. Completa los valores requeridos:
+   - **DefaultConnection**: Tu cadena de conexión a SQL Server.
+   - **GoogleDrive:FolderId**: El ID de la carpeta de Drive que deseas escanear.
+   - **google-credentials.json**: Coloca tu archivo de credenciales de Google Service Account en el directorio raíz.
+
+## 📱 Uso y PWA
+
+### Sincronización
+Para añadir música a la plataforma:
+- Sube tus archivos a la carpeta de Google Drive configurada.
+- En la aplicación, ve a la sección de configuración o usa el botón **Sincronizar con Drive**.
+
+### Instalación en iPhone
+Para disfrutar de la experiencia completa en iOS:
+1. Abre la URL en **Safari**.
+2. Toca el botón **Compartir**.
+3. Selecciona **"Agregar a pantalla de inicio"**.
+4. La app se abrirá en modo *standalone* (sin barras de navegador) con el icono dedicado.
+
+## 📝 Notas Técnicas
+
+- **Seguridad**: El sistema requiere HTTPS para habilitar todas las funciones PWA en dispositivos móviles.
+- **Service Worker**: El archivo `sw.js` opera en modo passthrough (sin caché agresivo) para garantizar la compatibilidad inmediata con el sistema de navegación dinámica.
+
+---
+© 2024 FV-CORE. Desarrollado con enfoque en el rendimiento y la estética Cyberpunk.
