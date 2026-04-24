@@ -41,7 +41,7 @@ public class PlaylistsController : Controller
         return View(playlist);
     }
 
-    [HttpPost]
+    [HttpPost("create")]
     public async Task<IActionResult> Create([FromBody] CreatePlaylistRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Nombre))
@@ -59,7 +59,7 @@ public class PlaylistsController : Controller
         return Json(new { success = true, id = playlist.Id, nombre = playlist.Nombre });
     }
 
-    [HttpPost]
+    [HttpPost("add-track")]
     public async Task<IActionResult> AddTrack([FromBody] AddTrackRequest request)
     {
         var playlist = await _context.Playlists
@@ -91,7 +91,7 @@ public class PlaylistsController : Controller
     /// <summary>
     /// Batch add multiple tracks to a playlist. Skips duplicates and assigns order.
     /// </summary>
-    [HttpPost]
+    [HttpPost("add-tracks")]
     public async Task<IActionResult> AddTracksToPlaylist([FromBody] AddTracksRequest request)
     {
         if (request.MediaItemIds == null || request.MediaItemIds.Count == 0)
@@ -139,7 +139,7 @@ public class PlaylistsController : Controller
     /// <summary>
     /// Returns all playlists as JSON for the AJAX modal.
     /// </summary>
-    [HttpGet]
+    [HttpGet("all")]
     public async Task<IActionResult> GetAll()
     {
         var playlists = await _context.Playlists
@@ -158,7 +158,7 @@ public class PlaylistsController : Controller
         return Json(playlists);
     }
 
-    [HttpPost]
+    [HttpPost("remove-track")]
     public async Task<IActionResult> RemoveTrack([FromBody] AddTrackRequest request)
     {
         var pmi = await _context.PlaylistMediaItems

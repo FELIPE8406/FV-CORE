@@ -114,7 +114,10 @@
     // Initial Audio Listeners (moved outside initApp to avoid duplicates if initApp is called multiple times)
     state.audio.addEventListener('timeupdate', updateProgress);
     state.audio.addEventListener('ended', onAudioEnded);
-    state.audio.addEventListener('loadedmetadata', updateDuration);
+    state.audio.addEventListener('loadedmetadata', () => {
+        updateDuration();
+        updateMediaSessionPositionState();
+    });
     state.audio.addEventListener('play', () => {
         state.isPlaying = true;
         syncPlayState(true);
@@ -229,6 +232,9 @@
         // Update Now Playing panel if open
         syncNowPlayingUI();
 
+        // Update lock screen / control center metadata
+        updateMediaSession();
+
         // Update page title
         document.title = `▶ ${state.currentTitle} — FV-CORE`;
     }
@@ -266,6 +272,82 @@
         document.title = playing
             ? `▶ ${state.currentTitle} — FV-CORE`
             : `⏸ ${state.currentTitle} — FV-CORE`;
+
+        // Keep lock screen position state in sync
+        updateMediaSessionPositionState();
+    }
+
+    // ══════════════════════════════════════
+    //  MEDIA SESSION API (Lock Screen / Control Center)
+    // ══════════════════════════════════════
+    function updateMediaSession() {
+        if (!('mediaSession' in navigator)) return;
+
+        // Find album name from the library queue if available
+        let albumName = '';
+        if (state.libraryIndex >= 0 && state.libraryQueue[state.libraryIndex]) {
+            albumName = state.libraryQueue[state.libraryIndex].album || '';
+        }
+
+        // Set structured metadata: title, artist, album, artwork
+        const coverUrl = `${location.origin}/cover/${state.currentCoverId}`;
+        navigator.mediaSession.metadata = new MediaMetadata({
+            title: state.currentTitle,
+            artist: state.currentArtist,
+            album: albumName,
+            artwork: [
+                { src: coverUrl, sizes: '256x256', type: 'image/jpeg' },
+                { src: coverUrl, sizes: '512x512', type: 'image/jpeg' }
+            ]
+        });
+
+        // Register transport controls — NextTrack / PreviousTrack
+        // This replaces the default seekforward/seekbackward (10s skip) buttons
+        navigator.mediaSession.setActionHandler('play', () => {
+            state.audio.play().catch(() => {});
+        });
+        navigator.mediaSession.setActionHandler('pause', () => {
+            state.audio.pause();
+        });
+        navigator.mediaSession.setActionHandler('nexttrack', () => {
+            playNext();
+        });
+        navigator.mediaSession.setActionHandler('previoustrack', () => {
+            playPrevious();
+        });
+        navigator.mediaSession.setActionHandler('stop', () => {
+            state.audio.pause();
+            state.audio.currentTime = 0;
+        });
+
+        // Seek-to for lock screen scrubbing (if supported)
+        try {
+            navigator.mediaSession.setActionHandler('seekto', (details) => {
+                if (details.seekTime != null) {
+                    state.audio.currentTime = details.seekTime;
+                    updateMediaSessionPositionState();
+                }
+            });
+        } catch (e) { /* seekto not supported on this browser */ }
+
+        // Explicitly disable seekforward/seekbackward so OS shows Next/Prev buttons
+        try { navigator.mediaSession.setActionHandler('seekforward', null); } catch (e) {}
+        try { navigator.mediaSession.setActionHandler('seekbackward', null); } catch (e) {}
+
+        // Set initial position state
+        updateMediaSessionPositionState();
+    }
+
+    function updateMediaSessionPositionState() {
+        if (!('mediaSession' in navigator)) return;
+        if (!state.audio.duration || isNaN(state.audio.duration)) return;
+        try {
+            navigator.mediaSession.setPositionState({
+                duration: state.audio.duration,
+                playbackRate: state.audio.playbackRate || 1,
+                position: Math.min(state.audio.currentTime, state.audio.duration)
+            });
+        } catch (e) { /* setPositionState not supported */ }
     }
 
     // ── Audio ended handler ──
@@ -870,7 +952,7 @@
 
     async function removeFromPlaylist(playlistId, mediaItemId) {
         try {
-            const response = await fetch('/Playlists/RemoveTrack', {
+            const response = await fetch('/api/playlists/remove-track', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ playlistId, mediaItemId })
@@ -966,59 +1048,72 @@
     let openPlaylistPickerFor = () => {};
 
     function initPlaylistModals() {
-        const createBtn = document.getElementById('create-playlist-btn');
-        const modal = document.getElementById('playlist-modal');
-        const cancelBtn = document.getElementById('modal-cancel');
-        const confirmBtn = document.getElementById('modal-confirm');
-        const nameInput = document.getElementById('playlist-name-input');
+        // Guard: only attach delegated listeners once
+        if (window.__playlistModalsInit) return;
+        window.__playlistModalsInit = true;
 
-        if (createBtn && modal) {
-            createBtn.addEventListener('click', () => modal.classList.add('active'));
-            cancelBtn?.addEventListener('click', () => modal.classList.remove('active'));
-            modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('active'); });
+        // Open "Create Playlist" modal
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('#create-playlist-btn')) return;
+            const modal = document.getElementById('playlist-modal');
+            if (modal) modal.classList.add('active');
+        });
 
-            confirmBtn?.addEventListener('click', async () => {
-                const name = nameInput?.value?.trim();
-                if (!name) return;
-                try {
-                    const response = await fetch('/Playlists/Create', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ nombre: name })
-                    });
-                    const result = await response.json();
-                    if (result.success) {
-                        showToast(`Playlist "${name}" creada`);
-                        modal.classList.remove('active');
-                        if (nameInput) nameInput.value = '';
-                        setTimeout(() => location.reload(), 500);
+        // Cancel / backdrop close
+        document.addEventListener('click', (e) => {
+            if (e.target.closest('#modal-cancel')) {
+                const modal = document.getElementById('playlist-modal');
+                if (modal) modal.classList.remove('active');
+                return;
+            }
+            const modal = document.getElementById('playlist-modal');
+            if (modal && e.target === modal) {
+                modal.classList.remove('active');
+            }
+        });
+
+        // Confirm create
+        document.addEventListener('click', async (e) => {
+            if (!e.target.closest('#modal-confirm')) return;
+            const nameInput = document.getElementById('playlist-name-input');
+            const name = nameInput?.value?.trim();
+            if (!name) return;
+            try {
+                const response = await fetch('/api/playlists/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ nombre: name })
+                });
+                const result = await response.json();
+                if (result.success) {
+                    showToast(`Playlist "${name}" creada`);
+                    const modal = document.getElementById('playlist-modal');
+                    if (modal) modal.classList.remove('active');
+                    if (nameInput) nameInput.value = '';
+                    // Refresh view without full page reload (SPA-friendly)
+                    if (window.location.pathname.startsWith('/Playlists')) {
+                        navigateTo('/Playlists');
                     }
-                } catch (err) { console.error(err); }
-            });
-        }
+                }
+            } catch (err) { console.error(err); }
+        });
     }
 
     // ══════════════════════════════════════
     //  TRACK SELECTION & PLAYLIST PICKER
     // ══════════════════════════════════════
     function initTrackSelection() {
-        const selectionBar = document.getElementById('selection-bar');
-        const countDisplay = document.getElementById('selection-count-num');
-        const btnOpenPicker = document.getElementById('btn-open-playlist-picker');
-        const btnClear = document.getElementById('btn-clear-selection');
-        const pickerModal = document.getElementById('playlist-picker-modal');
-        const pickerList = document.getElementById('playlist-picker-list');
-        const pickerNewName = document.getElementById('picker-new-name');
-        const pickerCreateBtn = document.getElementById('picker-create-btn');
-        const pickerCancelBtn = document.getElementById('picker-cancel-btn');
+        // Guard: only attach delegated listeners once
+        if (window.__trackSelectionInit) return;
+        window.__trackSelectionInit = true;
 
         let pendingTrackIds = [];
         let selectedIds = new Set();
 
-        // Expose for context menu
+        // Expose for context menu — uses fresh DOM lookups
         openPlaylistPickerFor = (trackIds) => openPlaylistPicker(trackIds);
 
-        // Quick-Add "+" button (single track)
+        // Quick-Add "+" button (single track) — already delegated to document
         document.addEventListener('click', (e) => {
             const btn = e.target.closest('.btn-quick-add');
             
@@ -1037,25 +1132,80 @@
             if (mediaId) openPlaylistPicker([mediaId]);
         });
 
+        // Delegated: click on a playlist item inside the picker list
+        document.addEventListener('click', async (e) => {
+            const item = e.target.closest('.playlist-picker-item');
+            if (!item) return;
+            // Only handle if inside the picker modal
+            if (!item.closest('#playlist-picker-modal')) return;
+            await addTracksToPlaylist(parseInt(item.dataset.playlistId), pendingTrackIds);
+            const modal = document.getElementById('playlist-picker-modal');
+            if (modal) { modal.classList.remove('active'); modal.classList.remove('visible'); }
+        });
+
+        // Delegated: "Crear" button inside the picker
+        document.addEventListener('click', async (e) => {
+            if (!e.target.closest('#picker-create-btn')) return;
+            const nameInput = document.getElementById('picker-new-name');
+            const name = nameInput?.value?.trim();
+            if (!name) return;
+            try {
+                const response = await fetch('/api/playlists/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ nombre: name })
+                });
+                const result = await response.json();
+                if (result.success) {
+                    showToast(`Playlist "${name}" creada`);
+                    if (nameInput) nameInput.value = '';
+                    await addTracksToPlaylist(result.id, pendingTrackIds);
+                    const modal = document.getElementById('playlist-picker-modal');
+                    if (modal) { modal.classList.remove('active'); modal.classList.remove('visible'); }
+                }
+            } catch (err) { console.error(err); }
+        });
+
+        // Delegated: "Cancelar" button & backdrop click to close picker
+        document.addEventListener('click', (e) => {
+            if (e.target.closest('#picker-cancel-btn')) {
+                const modal = document.getElementById('playlist-picker-modal');
+                if (modal) { modal.classList.remove('active'); modal.classList.remove('visible'); }
+                pendingTrackIds = [];
+                return;
+            }
+            // Backdrop: click directly on the modal overlay itself
+            const modal = document.getElementById('playlist-picker-modal');
+            if (modal && e.target === modal) {
+                modal.classList.remove('active');
+                modal.classList.remove('visible');
+                pendingTrackIds = [];
+            }
+        });
+
         async function openPlaylistPicker(trackIds) {
             pendingTrackIds = trackIds;
-            pickerModal?.classList.add('active');
+            // Fresh lookup every time — survives SPA navigation
+            const modal = document.getElementById('playlist-picker-modal');
+            if (modal) { modal.classList.add('active'); modal.classList.add('visible'); }
             try {
-                const response = await fetch('/Playlists/GetAll');
+                const response = await fetch('/api/playlists/all');
                 const playlists = await response.json();
                 renderPlaylistPicker(playlists);
             } catch (err) {
-                if (pickerList) pickerList.innerHTML = '<div class="playlist-picker-empty">Error al cargar playlists</div>';
+                const list = document.getElementById('playlist-picker-list');
+                if (list) list.innerHTML = '<div class="playlist-picker-empty">Error al cargar playlists</div>';
             }
         }
 
         function renderPlaylistPicker(playlists) {
-            if (!pickerList) return;
+            const list = document.getElementById('playlist-picker-list');
+            if (!list) return;
             if (playlists.length === 0) {
-                pickerList.innerHTML = '<div class="playlist-picker-empty">No tienes playlists aún. ¡Crea una!</div>';
+                list.innerHTML = '<div class="playlist-picker-empty">No tienes playlists aún. ¡Crea una!</div>';
                 return;
             }
-            pickerList.innerHTML = playlists.map(p => `
+            list.innerHTML = playlists.map(p => `
                 <div class="playlist-picker-item" data-playlist-id="${p.id}">
                     <div>
                         <div class="ppi-name">☰ ${p.nombre}</div>
@@ -1066,38 +1216,9 @@
             `).join('');
         }
 
-        pickerList?.addEventListener('click', async (e) => {
-            const item = e.target.closest('.playlist-picker-item');
-            if (!item) return;
-            await addTracksToPlaylist(parseInt(item.dataset.playlistId), pendingTrackIds);
-            pickerModal?.classList.remove('active');
-        });
-
-        pickerCreateBtn?.addEventListener('click', async () => {
-            const name = pickerNewName?.value?.trim();
-            if (!name) return;
-            try {
-                const response = await fetch('/Playlists/Create', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ nombre: name })
-                });
-                const result = await response.json();
-                if (result.success) {
-                    showToast(`Playlist "${name}" creada`);
-                    if (pickerNewName) pickerNewName.value = '';
-                    await addTracksToPlaylist(result.id, pendingTrackIds);
-                    pickerModal?.classList.remove('active');
-                }
-            } catch (err) { console.error(err); }
-        });
-
-        pickerCancelBtn?.addEventListener('click', () => { pickerModal?.classList.remove('active'); pendingTrackIds = []; });
-        pickerModal?.addEventListener('click', (e) => {
-            if (e.target === pickerModal) { pickerModal.classList.remove('active'); pendingTrackIds = []; }
-        });
-
         function updateSelectionUI() {
+            const countDisplay = document.getElementById('selection-count-num');
+            const selectionBar = document.getElementById('selection-bar');
             const count = selectedIds.size;
             if (countDisplay) countDisplay.textContent = count;
             if (selectionBar) selectionBar.classList.toggle('visible', count > 0);
@@ -1105,7 +1226,7 @@
 
         async function addTracksToPlaylist(playlistId, mediaItemIds) {
             try {
-                const response = await fetch('/Playlists/AddTracksToPlaylist', {
+                const response = await fetch('/api/playlists/add-tracks', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ playlistId, mediaItemIds })
@@ -1128,13 +1249,11 @@
             } catch (err) { showToast('Error de conexión'); }
         }
 
-        if (!selectionBar) return;
-
+        // Selection checkboxes — delegated to document (survives SPA nav)
         document.addEventListener('change', (e) => {
             const cb = e.target;
             if (!cb.classList.contains('track-select-cb')) {
                 if (cb.id === 'select-all-music') {
-                    // Global Select All (for the whole page)
                     document.querySelectorAll('.track-select-cb').forEach(box => {
                         box.checked = cb.checked;
                         const id = parseInt(box.dataset.id);
@@ -1145,7 +1264,6 @@
                     return;
                 }
                 if (cb.classList.contains('select-all-album')) {
-                    // Select All for the specific accordion table
                     const table = cb.closest('table');
                     if (!table) return;
                     table.querySelectorAll('.track-select-cb').forEach(box => {
@@ -1164,7 +1282,9 @@
             updateSelectionUI();
         });
 
-        btnClear?.addEventListener('click', () => {
+        // Clear selection — delegated
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('#btn-clear-selection')) return;
             selectedIds.clear();
             document.querySelectorAll('.track-select-cb').forEach(cb => {
                 cb.checked = false;
@@ -1174,7 +1294,9 @@
             updateSelectionUI();
         });
 
-        btnOpenPicker?.addEventListener('click', () => {
+        // Open picker from selection bar — delegated
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('#btn-open-playlist-picker')) return;
             if (selectedIds.size > 0) window.openPlaylistPickerFor(Array.from(selectedIds));
         });
     }
@@ -1770,7 +1892,7 @@
                 }
                 
                 try {
-                    const res = await fetch('/Playlists/Create', {
+                    const res = await fetch('/api/playlists/create', {
                         method: 'POST',
                         headers:{ 'Content-Type': 'application/json' },
                         body: JSON.stringify({ Nombre: nombre })
@@ -1797,7 +1919,7 @@
         listDiv.innerHTML = '<div style="text-align:center; padding:10px;">Cargando...</div>';
         
         try {
-            const res = await fetch('/Playlists/GetAll');
+            const res = await fetch('/api/playlists/all');
             const data = await res.json();
             
             if (data.length === 0) {
@@ -1827,7 +1949,7 @@
     async function addTracksToPlaylist(playlistId, playlistName) {
         try {
             const req = { PlaylistId: playlistId, MediaItemIds: currentTracksToPlaylist };
-            const res = await fetch('/Playlists/AddTracksToPlaylist', {
+            const res = await fetch('/api/playlists/add-tracks', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(req)
