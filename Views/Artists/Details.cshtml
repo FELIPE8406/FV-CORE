@@ -43,7 +43,7 @@
                 <div>
                     <div class="album-name">@album.Key</div>
                     <div class="album-track-count">@album.Value.Count pistas</div>
-                    <a class="btn-neon small" style="margin-top: 10px; display: inline-block;" href="@Url.Action("DownloadAlbum", "Streaming", new { albumName = album.Key, artistName = Model.Nombre })">⬇ Descargar Álbum</a>
+                    <a class="btn-neon small" style="margin-top: 10px; display: inline-block;" href="@Url.Action("DownloadAlbum", "Streaming", new { trackId = firstTrack?.Id ?? 0 })">⬇ Descargar Álbum</a>
                 </div>
             </div>
             <table class="track-list">

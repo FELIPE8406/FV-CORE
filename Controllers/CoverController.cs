@@ -41,7 +41,7 @@ public class CoverController : Controller
         {
             coverPath = await _context.MediaItems
                 .AsNoTracking()
-                .Where(m => m.AlbumName == media.AlbumName && m.CoverPath != null)
+                .Where(m => m.AlbumName == media.AlbumName && m.CoverPath != null && m.CoverPath != "")
                 .Select(m => m.CoverPath)
                 .FirstOrDefaultAsync();
         }

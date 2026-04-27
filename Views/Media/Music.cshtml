@@ -93,7 +93,7 @@
                     </div>
                 </div>
                 <div class="album-accordion-meta">
-                    <a class="btn-neon small" style="margin-right: 12px;" href="@Url.Action("DownloadAlbum", "Streaming", new { albumName = albumGroup.Key.Album, artistName = albumGroup.Key.Artist })" onclick="event.stopPropagation();">⬇ Descargar Álbum</a>
+                    <a class="btn-neon small" style="margin-right: 12px;" href="@Url.Action("DownloadAlbum", "Streaming", new { trackId = firstTrack.Id })" onclick="event.stopPropagation();">⬇ Descargar Álbum</a>
                     <div class="album-accordion-count">@trackCount pistas</div>
                     <svg class="album-accordion-chevron" viewBox="0 0 24 24">
                         <path d="M6 9l6 6 6-6"/>

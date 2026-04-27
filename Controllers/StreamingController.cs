@@ -142,85 +142,105 @@ public class StreamingController : Controller
         };
     }
 
-    [HttpGet("Streaming/download-album")]
-    public async Task<IActionResult> DownloadAlbum(string albumName, string artistName)
+    [HttpGet("Streaming/download-album/{trackId:int}")]
+    public async Task<IActionResult> DownloadAlbum(int trackId)
     {
-        if (string.IsNullOrEmpty(albumName)) return BadRequest("Album name is required.");
-
-        var tracks = await _context.MediaItems
-            .AsNoTracking()
-            .Where(m => m.AlbumName == albumName && (string.IsNullOrEmpty(artistName) || m.ArtistName == artistName))
-            .ToListAsync();
-
-        if (!tracks.Any()) return NotFound("Album not found.");
-
-        var memoryStream = new MemoryStream();
-        using (var archive = new System.IO.Compression.ZipArchive(memoryStream, System.IO.Compression.ZipArchiveMode.Create, true))
+        try
         {
-            var token = await _authService.GetAccessTokenAsync();
-            var httpClient = _httpClientFactory.CreateClient();
+            var referenceTrack = await _context.MediaItems
+                .AsNoTracking()
+                .FirstOrDefaultAsync(m => m.Id == trackId);
 
-            foreach (var track in tracks)
+            if (referenceTrack == null || string.IsNullOrEmpty(referenceTrack.AlbumName))
+                return Content("Error: Álbum no encontrado o la pista no pertenece a ningún álbum.");
+
+            var tracksQuery = _context.MediaItems
+                .AsNoTracking()
+                .Where(m => m.AlbumName == referenceTrack.AlbumName);
+            
+            if (referenceTrack.ArtistId.HasValue)
+                tracksQuery = tracksQuery.Where(m => m.ArtistId == referenceTrack.ArtistId);
+            else if (!string.IsNullOrEmpty(referenceTrack.ArtistName))
+                tracksQuery = tracksQuery.Where(m => m.ArtistName == referenceTrack.ArtistName);
+
+            var tracks = await tracksQuery.ToListAsync();
+
+            if (!tracks.Any())
+                return Content("Error: El álbum tiene 0 pistas válidas.");
+
+            var memoryStream = new MemoryStream();
+            using (var archive = new System.IO.Compression.ZipArchive(memoryStream, System.IO.Compression.ZipArchiveMode.Create, true))
             {
-                if (string.IsNullOrEmpty(track.GoogleDriveId)) continue;
+                var token = await _authService.GetAccessTokenAsync();
+                var httpClient = _httpClientFactory.CreateClient();
 
-                var requestUrl = $"https://www.googleapis.com/drive/v3/files/{track.GoogleDriveId}?alt=media";
-                var httpRequest = new HttpRequestMessage(HttpMethod.Get, requestUrl);
-                httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-
-                var response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead);
-                if (response.IsSuccessStatusCode)
+                foreach (var track in tracks)
                 {
-                    var ext = Path.GetExtension(track.RutaArchivo);
-                    if (string.IsNullOrEmpty(ext)) ext = ".mp3";
-                    
-                    var safeFileName = new string(track.Titulo.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray());
-                    safeFileName = System.Text.RegularExpressions.Regex.Replace(safeFileName, @"_+", "_").Trim('_');
-                    var entryName = $"{safeFileName}{ext}";
-                    
-                    var entry = archive.CreateEntry(entryName);
-                    using var entryStream = entry.Open();
-                    using var bodyStream = await response.Content.ReadAsStreamAsync();
-                    await bodyStream.CopyToAsync(entryStream);
-                }
-            }
+                    if (string.IsNullOrEmpty(track.GoogleDriveId)) continue;
 
-            var coverTrack = tracks.FirstOrDefault(t => !string.IsNullOrEmpty(t.CoverPath));
-            if (coverTrack != null)
-            {
-                if (coverTrack.CoverPath.StartsWith("driveId:"))
-                {
-                    var driveId = coverTrack.CoverPath.Substring(8);
-                    var requestUrl = $"https://www.googleapis.com/drive/v3/files/{driveId}?alt=media";
+                    var requestUrl = $"https://www.googleapis.com/drive/v3/files/{track.GoogleDriveId}?alt=media";
                     var httpRequest = new HttpRequestMessage(HttpMethod.Get, requestUrl);
                     httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+
                     var response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead);
                     if (response.IsSuccessStatusCode)
                     {
-                        var entry = archive.CreateEntry("cover.jpg");
+                        var ext = Path.GetExtension(track.RutaArchivo);
+                        if (string.IsNullOrEmpty(ext)) ext = ".mp3";
+                        
+                        var safeFileName = new string(track.Titulo.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray());
+                        safeFileName = System.Text.RegularExpressions.Regex.Replace(safeFileName, @"_+", "_").Trim('_');
+                        var entryName = $"{safeFileName}{ext}";
+                        
+                        var entry = archive.CreateEntry(entryName);
                         using var entryStream = entry.Open();
                         using var bodyStream = await response.Content.ReadAsStreamAsync();
                         await bodyStream.CopyToAsync(entryStream);
                     }
                 }
-                else if (System.IO.File.Exists(coverTrack.CoverPath))
+
+                var coverTrack = tracks.FirstOrDefault(t => !string.IsNullOrEmpty(t.CoverPath));
+                if (coverTrack != null)
                 {
-                    var ext = Path.GetExtension(coverTrack.CoverPath);
-                    if (string.IsNullOrEmpty(ext)) ext = ".jpg";
-                    var entry = archive.CreateEntry($"cover{ext}");
-                    using var entryStream = entry.Open();
-                    using var fileStream = System.IO.File.OpenRead(coverTrack.CoverPath);
-                    await fileStream.CopyToAsync(entryStream);
+                    if (coverTrack.CoverPath.StartsWith("driveId:"))
+                    {
+                        var driveId = coverTrack.CoverPath.Substring(8);
+                        var requestUrl = $"https://www.googleapis.com/drive/v3/files/{driveId}?alt=media";
+                        var httpRequest = new HttpRequestMessage(HttpMethod.Get, requestUrl);
+                        httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+                        var response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead);
+                        if (response.IsSuccessStatusCode)
+                        {
+                            var entry = archive.CreateEntry("cover.jpg");
+                            using var entryStream = entry.Open();
+                            using var bodyStream = await response.Content.ReadAsStreamAsync();
+                            await bodyStream.CopyToAsync(entryStream);
+                        }
+                    }
+                    else if (System.IO.File.Exists(coverTrack.CoverPath))
+                    {
+                        var ext = Path.GetExtension(coverTrack.CoverPath);
+                        if (string.IsNullOrEmpty(ext)) ext = ".jpg";
+                        var entry = archive.CreateEntry($"cover{ext}");
+                        using var entryStream = entry.Open();
+                        using var fileStream = System.IO.File.OpenRead(coverTrack.CoverPath);
+                        await fileStream.CopyToAsync(entryStream);
+                    }
                 }
             }
+
+            memoryStream.Position = 0;
+            
+            var safeAlbumName = new string(referenceTrack.AlbumName.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray());
+            safeAlbumName = System.Text.RegularExpressions.Regex.Replace(safeAlbumName, @"_+", "_").Trim('_');
+            var zipName = $"{safeAlbumName}.zip";
+
+            return File(memoryStream, "application/zip", zipName);
         }
-
-        memoryStream.Position = 0;
-        
-        var safeAlbumName = new string(albumName.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray());
-        safeAlbumName = System.Text.RegularExpressions.Regex.Replace(safeAlbumName, @"_+", "_").Trim('_');
-        var zipName = $"{safeAlbumName}.zip";
-
-        return File(memoryStream, "application/zip", zipName);
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error al descargar el álbum completo");
+            return Content($"Error inesperado al generar el ZIP del álbum: {ex.Message}");
+        }
     }
 }
