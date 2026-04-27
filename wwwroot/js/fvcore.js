@@ -1452,8 +1452,12 @@
             const link = e.target.closest('a');
             if (!link) return;
             const href = link.getAttribute('href');
-            if (!href || href.startsWith('#') || href.startsWith('javascript:') || link.target === '_blank') return;
-            if (link.hostname !== window.location.hostname) return;
+            if (!href || href.startsWith('#') || href.startsWith('javascript:') || link.target === '_blank' || link.hasAttribute('download')) return;
+            if (link.hostname !== window.location.hostname && link.hostname !== '') return;
+            
+            // Allow download endpoints to bypass SPA
+            if (href.toLowerCase().includes('/streaming/download')) return;
+
             e.preventDefault();
             navigateTo(href);
         });

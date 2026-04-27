@@ -154,6 +154,8 @@ public class StreamingController : Controller
             if (referenceTrack == null || string.IsNullOrEmpty(referenceTrack.AlbumName))
                 return Content("Error: Álbum no encontrado o la pista no pertenece a ningún álbum.");
 
+            _context.Database.SetCommandTimeout(300);
+
             var tracksQuery = _context.MediaItems
                 .AsNoTracking()
                 .Where(m => m.AlbumName == referenceTrack.AlbumName);
@@ -168,8 +170,15 @@ public class StreamingController : Controller
             if (!tracks.Any())
                 return Content("Error: El álbum tiene 0 pistas válidas.");
 
-            var memoryStream = new MemoryStream();
-            using (var archive = new System.IO.Compression.ZipArchive(memoryStream, System.IO.Compression.ZipArchiveMode.Create, true))
+            var safeAlbumName = new string(referenceTrack.AlbumName.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray());
+            safeAlbumName = System.Text.RegularExpressions.Regex.Replace(safeAlbumName, @"_+", "_").Trim('_');
+            var zipName = $"{safeAlbumName}.zip";
+
+            Response.ContentType = "application/zip";
+            Response.Headers.Append("Content-Disposition", $"attachment; filename=\"{zipName}\"");
+            await Response.Body.FlushAsync();
+
+            using (var archive = new System.IO.Compression.ZipArchive(Response.Body, System.IO.Compression.ZipArchiveMode.Create, true))
             {
                 var token = await _authService.GetAccessTokenAsync();
                 var httpClient = _httpClientFactory.CreateClient();
@@ -196,6 +205,7 @@ public class StreamingController : Controller
                         using var entryStream = entry.Open();
                         using var bodyStream = await response.Content.ReadAsStreamAsync();
                         await bodyStream.CopyToAsync(entryStream);
+                        await Response.Body.FlushAsync();
                     }
                 }
 
@@ -229,18 +239,16 @@ public class StreamingController : Controller
                 }
             }
 
-            memoryStream.Position = 0;
-            
-            var safeAlbumName = new string(referenceTrack.AlbumName.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray());
-            safeAlbumName = System.Text.RegularExpressions.Regex.Replace(safeAlbumName, @"_+", "_").Trim('_');
-            var zipName = $"{safeAlbumName}.zip";
-
-            return File(memoryStream, "application/zip", zipName);
+            return new EmptyResult();
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error al descargar el álbum completo");
-            return Content($"Error inesperado al generar el ZIP del álbum: {ex.Message}");
+            if (!Response.HasStarted)
+            {
+                return Content($"Error inesperado al generar el ZIP del álbum: {ex.Message}");
+            }
+            return new EmptyResult();
         }
     }
 }
