@@ -83,7 +83,7 @@
             
             <div class="album-accordion-header ui-glass-card" data-album="@albumGroup.Key.Album" data-artist="@albumGroup.Key.Artist" data-body-id="body-@hash" data-offset="@globalIndexOffset">
                 <div class="album-accordion-info">
-                    <img class="album-accordion-cover" src="/cover/@firstTrack.Id" alt="" loading="lazy" />
+                    <img class="album-accordion-cover" src="/cover/@firstTrack.Id?v=@DateTime.UtcNow.Ticks" alt="" loading="lazy" />
                     <div class="album-accordion-text">
                         <div class="album-accordion-title">@displayAlbum</div>
                         @if(!string.IsNullOrEmpty(displayArtist))

@@ -37,17 +37,26 @@ public class CoverController : Controller
 
         var coverPath = media.CoverPath;
 
-        if (string.IsNullOrEmpty(coverPath) && !string.IsNullOrEmpty(media.AlbumName))
+        bool IsValidCover(string path) => !string.IsNullOrWhiteSpace(path) && 
+            (path.StartsWith("driveId:") || path.StartsWith("http://") || path.StartsWith("https://") || System.IO.File.Exists(path));
+
+        if (!IsValidCover(coverPath) && !string.IsNullOrWhiteSpace(media.AlbumName))
         {
-            coverPath = await _context.MediaItems
+            var albumCovers = await _context.MediaItems
                 .AsNoTracking()
                 .Where(m => m.AlbumName == media.AlbumName && m.CoverPath != null && m.CoverPath != "")
                 .Select(m => m.CoverPath)
-                .FirstOrDefaultAsync();
+                .ToListAsync();
+
+            coverPath = albumCovers.FirstOrDefault(c => IsValidCover(c));
         }
 
         if (coverPath != null)
         {
+            if (coverPath.StartsWith("http://") || coverPath.StartsWith("https://"))
+            {
+                return Redirect(coverPath);
+            }
             if (coverPath.StartsWith("driveId:"))
             {
                 return await ProxyDriveFile(coverPath.Substring(8));
