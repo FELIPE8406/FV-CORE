@@ -1359,6 +1359,7 @@
                 <tr data-track-id="${track.id}" 
                     data-title="${track.title}" 
                     data-artist="${track.artist}" 
+                    data-cover-id="${track.coverId}"
                     class="${isPlaying ? 'playing' : ''}">
                     <td class="track-select-cell">
                         <input type="checkbox" class="track-checkbox track-select-cb" data-id="${track.id}" />
@@ -1366,7 +1367,7 @@
                     <td class="track-number">${offset + i + 1}</td>
                     <td>
                         <div class="track-title-cell">
-                            <img class="track-cover" src="/cover/${track.id}" alt="" loading="lazy" />
+                            <img class="track-cover" src="/cover/${track.coverId}" alt="" loading="lazy" />
                             <div class="track-info">
                                 <div class="track-title">${track.title}</div>
                             </div>

@@ -27,11 +27,24 @@ public class CoverController : Controller
     [ResponseCache(Duration = 31536000, Location = ResponseCacheLocation.Any)]
     public async Task<IActionResult> GetCover(int id)
     {
-        var coverPath = await _context.MediaItems
+        var media = await _context.MediaItems
             .AsNoTracking()
             .Where(m => m.Id == id)
-            .Select(m => m.CoverPath)
+            .Select(m => new { m.CoverPath, m.AlbumName })
             .FirstOrDefaultAsync();
+
+        if (media == null) return DefaultPlaceholder();
+
+        var coverPath = media.CoverPath;
+
+        if (string.IsNullOrEmpty(coverPath) && !string.IsNullOrEmpty(media.AlbumName))
+        {
+            coverPath = await _context.MediaItems
+                .AsNoTracking()
+                .Where(m => m.AlbumName == media.AlbumName && m.CoverPath != null)
+                .Select(m => m.CoverPath)
+                .FirstOrDefaultAsync();
+        }
 
         if (coverPath != null)
         {

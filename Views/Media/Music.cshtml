@@ -42,14 +42,17 @@
 
     window.__GLOBAL_TRACK_STORE = @Html.Raw(
         System.Text.Json.JsonSerializer.Serialize(
-            safeModel.Select(x => new {
-                id = x.Id.ToString(),
-                title = string.IsNullOrWhiteSpace(x.Titulo) ? "Unknown" : x.Titulo,
-                artist = string.IsNullOrWhiteSpace(x.ArtistName) ? "Unknown" : x.ArtistName,
-                album = string.IsNullOrWhiteSpace(x.AlbumName) ? "Unknown" : x.AlbumName,
-                genre = x.Genero ?? "Unknown",
-                quality = x.Calidad ?? "Unknown",
-                coverId = x.Id.ToString()
+            safeModel.Select(x => {
+                var albumFirstTrack = safeModel.FirstOrDefault(m => m.AlbumName == x.AlbumName && !string.IsNullOrEmpty(m.CoverPath));
+                return new {
+                    id = x.Id.ToString(),
+                    title = string.IsNullOrWhiteSpace(x.Titulo) ? "Unknown" : x.Titulo,
+                    artist = string.IsNullOrWhiteSpace(x.ArtistName) ? "Unknown" : x.ArtistName,
+                    album = string.IsNullOrWhiteSpace(x.AlbumName) ? "Unknown" : x.AlbumName,
+                    genre = x.Genero ?? "Unknown",
+                    quality = x.Calidad ?? "Unknown",
+                    coverId = (x.CoverPath != null ? x.Id : (albumFirstTrack?.Id ?? x.Id)).ToString()
+                };
             })
         )
     );
@@ -72,7 +75,7 @@
         }))
         {
             string hash = Guid.NewGuid().ToString("N").Substring(0, 8);
-            var firstTrack = albumGroup.First();
+            var firstTrack = albumGroup.FirstOrDefault(m => !string.IsNullOrEmpty(m.CoverPath)) ?? albumGroup.First();
             int trackCount = albumGroup.Count();
             
             string displayAlbum = string.Equals(albumGroup.Key.Album?.Trim(), "Unknown", StringComparison.OrdinalIgnoreCase) ? "Sencillos" : albumGroup.Key.Album;
@@ -90,6 +93,7 @@
                     </div>
                 </div>
                 <div class="album-accordion-meta">
+                    <a class="btn-neon small" style="margin-right: 12px;" href="@Url.Action("DownloadAlbum", "Streaming", new { albumName = albumGroup.Key.Album, artistName = albumGroup.Key.Artist })" onclick="event.stopPropagation();">⬇ Descargar Álbum</a>
                     <div class="album-accordion-count">@trackCount pistas</div>
                     <svg class="album-accordion-chevron" viewBox="0 0 24 24">
                         <path d="M6 9l6 6 6-6"/>

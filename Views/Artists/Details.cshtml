@@ -37,12 +37,13 @@
         <div class="album-section">
             <div class="album-header">
                 @{
-                    var firstTrack = album.Value.FirstOrDefault();
+                    var firstTrack = album.Value.FirstOrDefault(m => !string.IsNullOrEmpty(m.CoverPath)) ?? album.Value.FirstOrDefault();
                 }
                 <img class="album-cover" src="/cover/@(firstTrack?.Id ?? 0)" alt="@album.Key" />
                 <div>
                     <div class="album-name">@album.Key</div>
                     <div class="album-track-count">@album.Value.Count pistas</div>
+                    <a class="btn-neon small" style="margin-top: 10px; display: inline-block;" href="@Url.Action("DownloadAlbum", "Streaming", new { albumName = album.Key, artistName = Model.Nombre })">⬇ Descargar Álbum</a>
                 </div>
             </div>
             <table class="track-list">
@@ -65,14 +66,14 @@
                         <tr data-track-id="@track.Id"
                             data-title="@track.Titulo"
                             data-artist="@Model.Nombre"
-                            data-cover-id="@track.Id">
+                            data-cover-id="@(track.CoverPath != null ? track.Id : (firstTrack?.Id ?? track.Id))">
                             <td class="track-select-cell">
                                 <input type="checkbox" class="track-checkbox track-select-cb" data-id="@track.Id" />
                             </td>
                             <td class="track-number">@(i + 1)</td>
                             <td>
                                 <div class="track-title-cell">
-                                    <img class="track-cover" src="/cover/@track.Id" alt="" loading="lazy" />
+                                    <img class="track-cover" src="/cover/@(track.CoverPath != null ? track.Id : (firstTrack?.Id ?? track.Id))" alt="" loading="lazy" />
                                     <div class="track-info">
                                         <div class="track-title">@track.Titulo</div>
                                     </div>
