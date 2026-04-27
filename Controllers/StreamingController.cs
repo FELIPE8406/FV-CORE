@@ -191,31 +191,72 @@ public class StreamingController : Controller
                     var token = await _authService.GetAccessTokenAsync();
                     var httpClient = _httpClientFactory.CreateClient();
 
-                    foreach (var track in tracks)
+                    var downloadSemaphore = new SemaphoreSlim(4);
+                    var archiveSemaphore = new SemaphoreSlim(1);
+
+                    var downloadTasks = tracks.Where(t => !string.IsNullOrEmpty(t.GoogleDriveId)).Select(async track =>
                     {
-                        if (string.IsNullOrEmpty(track.GoogleDriveId)) continue;
-
-                        var requestUrl = $"https://www.googleapis.com/drive/v3/files/{track.GoogleDriveId}?alt=media";
-                        var httpRequest = new HttpRequestMessage(HttpMethod.Get, requestUrl);
-                        httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-
-                        var response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead);
-                        if (response.IsSuccessStatusCode)
+                        await downloadSemaphore.WaitAsync();
+                        try
                         {
-                            var ext = Path.GetExtension(track.RutaArchivo);
-                            if (string.IsNullOrEmpty(ext)) ext = ".mp3";
-                            
-                            var safeFileName = new string(track.Titulo.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray());
-                            safeFileName = System.Text.RegularExpressions.Regex.Replace(safeFileName, @"_+", "_").Trim('_');
-                            var entryName = $"{safeFileName}{ext}";
-                            
-                            var entry = archive.CreateEntry(entryName);
-                            using var entryStream = entry.Open();
-                            using var bodyStream = await response.Content.ReadAsStreamAsync();
-                            await bodyStream.CopyToAsync(entryStream);
-                            await Response.Body.FlushAsync();
+                            var requestUrl = $"https://www.googleapis.com/drive/v3/files/{track.GoogleDriveId}?alt=media";
+                            var httpRequest = new HttpRequestMessage(HttpMethod.Get, requestUrl);
+                            httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+
+                            var response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead);
+                            if (response.IsSuccessStatusCode)
+                            {
+                                var ext = Path.GetExtension(track.RutaArchivo);
+                                if (string.IsNullOrEmpty(ext)) ext = ".mp3";
+                                
+                                var safeFileName = new string(track.Titulo.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray());
+                                safeFileName = System.Text.RegularExpressions.Regex.Replace(safeFileName, @"_+", "_").Trim('_');
+                                var entryName = $"{safeFileName}{ext}";
+                                
+                                var ms = new MemoryStream();
+                                using (var bodyStream = await response.Content.ReadAsStreamAsync())
+                                {
+                                    await bodyStream.CopyToAsync(ms, 81920);
+                                }
+                                ms.Position = 0;
+
+                                await archiveSemaphore.WaitAsync();
+                                try
+                                {
+                                    var entry = archive.CreateEntry(entryName, System.IO.Compression.CompressionLevel.NoCompression);
+                                    using var entryStream = entry.Open();
+                                    await ms.CopyToAsync(entryStream, 81920);
+                                    await Response.Body.FlushAsync();
+                                }
+                                finally
+                                {
+                                    archiveSemaphore.Release();
+                                    ms.Dispose();
+                                }
+                            }
                         }
-                    }
+                        catch (Exception ex)
+                        {
+                            await archiveSemaphore.WaitAsync();
+                            try
+                            {
+                                var errorEntry = archive.CreateEntry($"error_{track.Id}.txt");
+                                using var errStream = errorEntry.Open();
+                                using var sw = new StreamWriter(errStream);
+                                await sw.WriteAsync($"Error en pista {track.Id}: {ex.Message}");
+                            }
+                            finally
+                            {
+                                archiveSemaphore.Release();
+                            }
+                        }
+                        finally
+                        {
+                            downloadSemaphore.Release();
+                        }
+                    });
+
+                    await Task.WhenAll(downloadTasks);
 
                     var coverTrack = tracks.FirstOrDefault(t => !string.IsNullOrEmpty(t.CoverPath));
                     if (coverTrack != null)
@@ -229,20 +270,20 @@ public class StreamingController : Controller
                             var response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead);
                             if (response.IsSuccessStatusCode)
                             {
-                                var entry = archive.CreateEntry("cover.jpg");
+                                var entry = archive.CreateEntry("cover.jpg", System.IO.Compression.CompressionLevel.NoCompression);
                                 using var entryStream = entry.Open();
                                 using var bodyStream = await response.Content.ReadAsStreamAsync();
-                                await bodyStream.CopyToAsync(entryStream);
+                                await bodyStream.CopyToAsync(entryStream, 81920);
                             }
                         }
                         else if (System.IO.File.Exists(coverTrack.CoverPath))
                         {
                             var ext = Path.GetExtension(coverTrack.CoverPath);
                             if (string.IsNullOrEmpty(ext)) ext = ".jpg";
-                            var entry = archive.CreateEntry($"cover{ext}");
+                            var entry = archive.CreateEntry($"cover{ext}", System.IO.Compression.CompressionLevel.NoCompression);
                             using var entryStream = entry.Open();
                             using var fileStream = System.IO.File.OpenRead(coverTrack.CoverPath);
-                            await fileStream.CopyToAsync(entryStream);
+                            await fileStream.CopyToAsync(entryStream, 81920);
                         }
                     }
                 }
