@@ -34,55 +34,8 @@ public class StreamingController : Controller
 
         var token = await _authService.GetAccessTokenAsync();
         
-        var requestUrl = $"https://www.googleapis.com/drive/v3/files/{media.GoogleDriveId}?alt=media&supportsAllDrives=true";
-        var httpRequest = new HttpRequestMessage(HttpMethod.Get, requestUrl);
-        httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-
-        // Forward Range header if present
-        if (Request.Headers.TryGetValue("Range", out var range))
-        {
-            httpRequest.Headers.Add("Range", range.ToString());
-        }
-
-        var httpClient = _httpClientFactory.CreateClient();
-        var response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            return StatusCode((int)response.StatusCode, $"Error fetching from Google Drive: {response.ReasonPhrase}");
-        }
-
-        // Forward Content response headers (needed for range processing)
-        foreach (var header in response.Content.Headers)
-        {
-            Response.Headers[header.Key] = header.Value.ToArray();
-        }
-
-        var bodyStream = await response.Content.ReadAsStreamAsync();
-        var ext = Path.GetExtension(media.RutaArchivo)?.ToLowerInvariant();
-        var contentType = ext switch
-        {
-            ".mp3" => "audio/mpeg",
-            ".m4a" => "audio/mp4",
-            ".mp4" => "video/mp4",
-            ".webm" => "video/webm",
-            ".ogg" => "audio/ogg",
-            ".wav" => "audio/wav",
-            ".flac" => "audio/flac",
-            _ => response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream"
-        };
-        
-        // Remove Content-Type from headers if present, we'll set it explicitly
-        Response.Headers.Remove("Content-Type");
-
-        // Provide the precise status code (206 if Range request, else 200)
-        Response.StatusCode = (int)response.StatusCode;
-        
-        // We set enableRangeProcessing to false as we are already handling the Range forwarding
-        return new FileStreamResult(bodyStream, contentType)
-        {
-            EnableRangeProcessing = false 
-        };
+        var ext = Path.GetExtension(media.RutaArchivo)?.ToLowerInvariant() ?? "";
+        return await StreamDriveFile(media.GoogleDriveId, ext);
     }
 
     [HttpGet("Streaming/download/{id:int}")]
@@ -450,8 +403,9 @@ public class StreamingController : Controller
 
         if (!response.IsSuccessStatusCode)
         {
-            _logger.LogError("DownloadFile: Drive API returned {Status} for Media {Id}", response.StatusCode, id);
-            return StatusCode((int)response.StatusCode, $"Error fetching from Google Drive: {response.ReasonPhrase}");
+            var errContent = await response.Content.ReadAsStringAsync();
+            _logger.LogError("DownloadFile: Drive API returned {Status} for Media {Id}. Error: {Err}", response.StatusCode, id, errContent);
+            return StatusCode((int)response.StatusCode, $"Error fetching from Google Drive: {response.ReasonPhrase}. Details: {errContent}");
         }
 
         var ext = Path.GetExtension(media.RutaArchivo)?.ToLowerInvariant();
@@ -508,35 +462,46 @@ public class StreamingController : Controller
         var response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead);
 
         if (!response.IsSuccessStatusCode)
-            return StatusCode((int)response.StatusCode, $"Error fetching from Google Drive: {response.ReasonPhrase}");
+        {
+            var err = await response.Content.ReadAsStringAsync();
+            _logger.LogError("StreamDriveFile: Drive API error {Status}: {Err}", response.StatusCode, err);
+            return StatusCode((int)response.StatusCode, $"Error fetching from Google Drive: {response.ReasonPhrase}. Details: {err}");
+        }
 
-        // Forward all content headers (Content-Length, Content-Range, Accept-Ranges, etc.)
+        // Forward all content headers (Content-Length, Content-Range, etc.)
         foreach (var header in response.Content.Headers)
             Response.Headers[header.Key] = header.Value.ToArray();
 
-        // Forward Accept-Ranges from response headers (not content headers)
+        // Forward Accept-Ranges from response headers
         if (response.Headers.TryGetValues("Accept-Ranges", out var acceptRanges))
             Response.Headers["Accept-Ranges"] = acceptRanges.ToArray();
-
-        // Ensure Accept-Ranges is always set so the browser knows seeking is supported
-        if (!Response.Headers.ContainsKey("Accept-Ranges"))
+        else
             Response.Headers["Accept-Ranges"] = "bytes";
 
         Response.Headers.Remove("Content-Type");
-        // FIX: Preserve the actual status code (200 or 206 Partial Content)
-        Response.StatusCode = (int)response.StatusCode;
-
+        
         var contentType = ext switch
         {
+            ".mp3"  => "audio/mpeg",
+            ".m4a"  => "audio/mp4",
             ".mp4"  => "video/mp4",
             ".webm" => "video/webm",
-            ".ogg"  => "video/ogg",
-            _ => response.Content.Headers.ContentType?.ToString() ?? "video/mp4"
+            ".ogg"  => "audio/ogg",
+            ".wav"  => "audio/wav",
+            ".flac" => "audio/flac",
+            ".avi"  => "video/x-msvideo",
+            ".mkv"  => "video/x-matroska",
+            _ => response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream"
         };
+        Response.ContentType = contentType;
 
+        // Preserve exact status code (200 or 206)
+        Response.StatusCode = (int)response.StatusCode;
+
+        // Stream body directly to avoid FileStreamResult stripping headers or overriding status
         var bodyStream = await response.Content.ReadAsStreamAsync();
-        // EnableRangeProcessing=false because we manually handle Range forwarding above.
-        return new FileStreamResult(bodyStream, contentType) { EnableRangeProcessing = false };
+        await bodyStream.CopyToAsync(Response.Body);
+        return new EmptyResult();
     }
 
     // FIX: Cache FFmpeg detection — evaluated ONCE at startup, not per request.

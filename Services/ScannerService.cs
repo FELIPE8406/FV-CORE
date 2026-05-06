@@ -222,8 +222,8 @@ public class ScannerService : IHostedService
                                   "cover.jpeg", "folder.jpeg", "cover.png", "folder.png" };
 
         var imageEntries = allEntries
-            .Where(e => ImageExtensions.Contains(
-                Path.GetExtension(e.File.Name)?.ToLowerInvariant() ?? ""))
+            .Where(e => (e.File.MimeType != null && e.File.MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) ||
+                        ImageExtensions.Contains(Path.GetExtension(e.File.Name)?.ToLowerInvariant() ?? ""))
             .ToList();
 
         if (!imageEntries.Any())
@@ -259,17 +259,17 @@ public class ScannerService : IHostedService
 
         _logger.LogInformation("[COVERS] Image folders found: {Count}. Starting cover assignment.", folderToImages.Count);
 
-        // FIX: Load items with NO valid cover — includes null, empty, and whitespace CoverPath.
-        // Also re-process items whose CoverPath doesn't start with "driveId:" or "http"
-        // (catches previously failed assignments).
-        var nocover = await context.MediaItems
+        // FIX: Safe EF query — load CoverPath and evaluate the complex conditions locally
+        // to avoid translation errors like "StartsWith on NULL" in SQL Server.
+        var allCandidates = await context.MediaItems
             .AsNoTracking()
-            .Where(m => m.CoverPath == null
-                     || m.CoverPath == ""
-                     || m.CoverPath.Trim() == ""
-                     || (!m.CoverPath.StartsWith("driveId:") && !m.CoverPath.StartsWith("http")))
-            .Select(m => new { m.Id, m.AlbumName, m.ArtistName, m.RutaArchivo })
+            .Select(m => new { m.Id, m.AlbumName, m.ArtistName, m.RutaArchivo, m.CoverPath })
             .ToListAsync(ct);
+
+        var nocover = allCandidates
+            .Where(m => string.IsNullOrWhiteSpace(m.CoverPath) ||
+                        (!m.CoverPath.StartsWith("driveId:") && !m.CoverPath.StartsWith("http")))
+            .ToList();
 
         _logger.LogInformation("[COVERS] Items without valid cover: {Count}", nocover.Count);
 
