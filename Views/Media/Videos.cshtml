@@ -44,10 +44,19 @@
                         <span>@(video.AlbumName ?? "—")</span>
                         <span style="color: var(--neon-purple);">@(video.Calidad ?? "SD")</span>
                     </div>
+                    <div class="video-actions-row" style="margin-top:8px; display:flex; gap:8px;">
+                        <a href="/Streaming/download-file/@video.Id"
+                           class="btn-neon small"
+                           title="Descargar video en formato original"
+                           onclick="event.stopPropagation();">
+                            ⬇ Descargar video
+                        </a>
+                    </div>
                 </div>
             </div>
         }
     </div>
+
 
     @if (totalPages > 1)
     {

@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using FvCore.Data;
 using FvCore.Services;
 using Google.Apis.Auth.OAuth2;
+using System.Diagnostics;
 
 namespace FvCore.Controllers;
 
@@ -309,4 +310,262 @@ public class StreamingController : Controller
             return new EmptyResult();
         }
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // VIDEO STREAM WITH ON-THE-FLY TRANSCODING (AVI / MKV → MP4 H.264)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Streams any video from Google Drive, transcoding it on-the-fly to H.264/AAC MP4
+    /// via FFmpeg when the source format is not natively supported by browsers (e.g. .avi, .mkv).
+    /// Falls back to a direct stream if FFmpeg is unavailable on the server.
+    /// </summary>
+    [HttpGet("Streaming/video/{id:int}")]
+    public async Task<IActionResult> VideoStream(int id)
+    {
+        var media = await _context.MediaItems.FindAsync(id);
+        if (media == null || string.IsNullOrEmpty(media.GoogleDriveId))
+            return NotFound("Media not found or not synced with Google Drive.");
+
+        var ext = Path.GetExtension(media.RutaArchivo)?.ToLowerInvariant();
+
+        // Browser-native formats: pass through directly without transcoding
+        var nativeFormats = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".mp4", ".webm", ".ogg" };
+
+        if (nativeFormats.Contains(ext ?? ""))
+        {
+            // Re-use the standard stream proxy logic
+            return await StreamDriveFile(media.GoogleDriveId, ext!);
+        }
+
+        // Non-native format (e.g. .avi, .mkv) — try FFmpeg transcoding
+        var ffmpegPath = FindFfmpeg();
+        if (string.IsNullOrEmpty(ffmpegPath))
+        {
+            _logger.LogWarning("FFmpeg not found on server. Falling back to direct stream for {Ext} video (may not play in browser).", ext);
+            return await StreamDriveFile(media.GoogleDriveId, ext ?? ".avi");
+        }
+
+        _logger.LogInformation("Transcoding {Title} ({Ext}) via FFmpeg at {FfmpegPath}", media.Titulo, ext, ffmpegPath);
+
+        // Fetch the raw bytes from Google Drive into a pipe via FFmpeg
+        var token = await _authService.GetAccessTokenAsync();
+        var driveUrl = $"https://www.googleapis.com/drive/v3/files/{media.GoogleDriveId}?alt=media";
+
+        Response.ContentType = "video/mp4";
+        Response.Headers.Append("Cache-Control", "no-cache");
+        // Content-Disposition inline so the browser plays it
+        Response.Headers.Append("Content-Disposition", $"inline; filename=\"{Path.GetFileNameWithoutExtension(media.RutaArchivo)}.mp4\"");
+
+        // FFmpeg: read from stdin (piped from Drive), transcode, write MP4 to stdout
+        var psi = new ProcessStartInfo
+        {
+            FileName = ffmpegPath,
+            // -i pipe:0   → read input from stdin
+            // -c:v libx264 -preset ultrafast -crf 23  → fast H.264 encode
+            // -c:a aac -b:a 128k                       → AAC audio
+            // -movflags frag_keyframe+empty_moov+faststart → streaming-compatible MP4
+            // -f mp4 pipe:1                             → write MP4 to stdout
+            Arguments = "-i pipe:0 -c:v libx264 -preset ultrafast -crf 23 -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+faststart -f mp4 pipe:1",
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = false,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        Process? ffmpeg = null;
+        try
+        {
+            ffmpeg = Process.Start(psi)!;
+
+            // Pipe Drive download → FFmpeg stdin in background
+            var driveTask = Task.Run(async () =>
+            {
+                try
+                {
+                    using var httpClient = _httpClientFactory.CreateClient();
+                    var req = new HttpRequestMessage(HttpMethod.Get, driveUrl);
+                    req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+                    using var resp = await httpClient.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        using var driveStream = await resp.Content.ReadAsStreamAsync();
+                        await driveStream.CopyToAsync(ffmpeg.StandardInput.BaseStream);
+                    }
+                }
+                catch { /* Drive pipe may close when client disconnects */ }
+                finally
+                {
+                    try { ffmpeg.StandardInput.Close(); } catch { }
+                }
+            });
+
+            // Pipe FFmpeg stdout → HTTP response
+            await ffmpeg.StandardOutput.BaseStream.CopyToAsync(Response.Body);
+            await driveTask;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "FFmpeg transcoding error for media {Id}", id);
+        }
+        finally
+        {
+            try { ffmpeg?.Kill(); } catch { }
+            try { ffmpeg?.Dispose(); } catch { }
+        }
+
+        return new EmptyResult();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // INDIVIDUAL FILE DOWNLOAD (any track or video, original format)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Forces a browser download of a single media file in its original format.
+    /// Preserves the album ZIP download flow untouched.
+    /// </summary>
+    [HttpGet("Streaming/download-file/{id:int}")]
+    public async Task<IActionResult> DownloadFile(int id)
+    {
+        _logger.LogInformation("Single-file download requested for Media ID: {Id}", id);
+
+        var media = await _context.MediaItems.FindAsync(id);
+        if (media == null || string.IsNullOrEmpty(media.GoogleDriveId))
+        {
+            _logger.LogWarning("DownloadFile: Media {Id} not found or no Google Drive ID.", id);
+            return NotFound("Media not found or not synced with Google Drive.");
+        }
+
+        var token = await _authService.GetAccessTokenAsync();
+        var requestUrl = $"https://www.googleapis.com/drive/v3/files/{media.GoogleDriveId}?alt=media";
+        var httpRequest = new HttpRequestMessage(HttpMethod.Get, requestUrl);
+        httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+
+        var httpClient = _httpClientFactory.CreateClient();
+        var response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.LogError("DownloadFile: Drive API returned {Status} for Media {Id}", response.StatusCode, id);
+            return StatusCode((int)response.StatusCode, $"Error fetching from Google Drive: {response.ReasonPhrase}");
+        }
+
+        var ext = Path.GetExtension(media.RutaArchivo)?.ToLowerInvariant();
+        var contentType = ext switch
+        {
+            ".mp3"  => "audio/mpeg",
+            ".m4a"  => "audio/mp4",
+            ".mp4"  => "video/mp4",
+            ".webm" => "video/webm",
+            ".ogg"  => "audio/ogg",
+            ".wav"  => "audio/wav",
+            ".flac" => "audio/flac",
+            ".avi"  => "video/x-msvideo",
+            ".mkv"  => "video/x-matroska",
+            _ => response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream"
+        };
+
+        var invalidChars = Path.GetInvalidFileNameChars();
+        var safeFileName = new string(media.Titulo.Select(c => invalidChars.Contains(c) ? '_' : c).ToArray());
+        safeFileName = System.Text.RegularExpressions.Regex.Replace(safeFileName, @"_+", "_").Trim('_');
+        if (string.IsNullOrEmpty(ext)) ext = ".bin";
+        var finalName = $"{safeFileName}{ext}";
+
+        _logger.LogInformation("Starting single-file download stream: {FinalName}", finalName);
+
+        var bodyStream = await response.Content.ReadAsStreamAsync();
+
+        Response.Headers.Append("Content-Disposition", $"attachment; filename=\"{finalName}\"");
+
+        return new FileStreamResult(bodyStream, contentType)
+        {
+            FileDownloadName = finalName,
+            EnableRangeProcessing = true
+        };
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // PRIVATE HELPERS
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private async Task<IActionResult> StreamDriveFile(string driveId, string ext)
+    {
+        var token = await _authService.GetAccessTokenAsync();
+        var requestUrl = $"https://www.googleapis.com/drive/v3/files/{driveId}?alt=media";
+        var httpRequest = new HttpRequestMessage(HttpMethod.Get, requestUrl);
+        httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+
+        if (Request.Headers.TryGetValue("Range", out var range))
+            httpRequest.Headers.Add("Range", range.ToString());
+
+        var httpClient = _httpClientFactory.CreateClient();
+        var response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead);
+
+        if (!response.IsSuccessStatusCode)
+            return StatusCode((int)response.StatusCode, $"Error fetching from Google Drive: {response.ReasonPhrase}");
+
+        foreach (var header in response.Content.Headers)
+            Response.Headers[header.Key] = header.Value.ToArray();
+
+        Response.Headers.Remove("Content-Type");
+        Response.StatusCode = (int)response.StatusCode;
+
+        var contentType = ext switch
+        {
+            ".mp4"  => "video/mp4",
+            ".webm" => "video/webm",
+            ".ogg"  => "video/ogg",
+            _ => response.Content.Headers.ContentType?.ToString() ?? "video/mp4"
+        };
+
+        var bodyStream = await response.Content.ReadAsStreamAsync();
+        return new FileStreamResult(bodyStream, contentType) { EnableRangeProcessing = false };
+    }
+
+    /// <summary>
+    /// Resolves the FFmpeg executable path. Checks PATH, then common server locations.
+    /// </summary>
+    private static string? FindFfmpeg()
+    {
+        // 1. Honour explicit appsettings path if configured
+        // (injected via IConfiguration would require DI change — keep simple for now)
+
+        // 2. Check well-known paths on Linux/Windows servers
+        var candidates = new[]
+        {
+            "ffmpeg",                           // On PATH
+            "/usr/bin/ffmpeg",                  // Linux standard
+            "/usr/local/bin/ffmpeg",            // Linux alternate
+            @"C:\ffmpeg\bin\ffmpeg.exe",        // Windows common
+            @"C:\Program Files\ffmpeg\bin\ffmpeg.exe"
+        };
+
+        foreach (var candidate in candidates)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = candidate,
+                    Arguments = "-version",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                using var p = Process.Start(psi);
+                if (p != null)
+                {
+                    p.WaitForExit(2000);
+                    if (p.ExitCode == 0) return candidate;
+                }
+            }
+            catch { /* candidate not found */ }
+        }
+
+        return null;
+    }
 }
+

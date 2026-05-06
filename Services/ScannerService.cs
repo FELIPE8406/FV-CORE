@@ -194,6 +194,11 @@ public class ScannerService : IHostedService
         }
 
         _logger.LogInformation("NUEVOS: {Inserted} | ACTUALIZADOS: {Updated}", inserted, updated);
+
+        // ── Cover Art Pass ──────────────────────────────────────────────────
+        // After all media items are saved, assign cover art to albums that don't
+        // already have one, by looking for image files in the same Drive folders.
+        await AssignAlbumCoversFromDrive(driveService, allEntries, context, cancellationToken);
     }
     finally
     {
@@ -201,6 +206,101 @@ public class ScannerService : IHostedService
         _logger.LogInformation("SYNC FINALIZADO");
     }
 }
+
+    /// <summary>
+    /// Scans the already-fetched Drive entries for image files (cover.jpg, folder.jpg, etc.)
+    /// and assigns their driveId as CoverPath to all MediaItems in the matching album.
+    /// Skips albums that already have a valid CoverPath.
+    /// </summary>
+    private async Task AssignAlbumCoversFromDrive(
+        DriveService driveService,
+        List<DriveEntry> allEntries,
+        FvCoreDbContext context,
+        CancellationToken ct)
+    {
+        // Common cover art file names, in priority order
+        var coverNames = new[] { "cover.jpg", "folder.jpg", "album.jpg", "front.jpg", "artwork.jpg",
+                                  "cover.jpeg", "folder.jpeg", "cover.png", "folder.png" };
+
+        // Group image entries by their folder path (parent folder = album)
+        var imageEntries = allEntries
+            .Where(e => ImageExtensions.Contains(
+                Path.GetExtension(e.File.Name)?.ToLowerInvariant() ?? ""))
+            .ToList();
+
+        if (!imageEntries.Any())
+        {
+            _logger.LogInformation("[COVERS] No image files found in Drive scan.");
+            return;
+        }
+
+        // Build a lookup: folder-path-key → list of image files sorted by priority
+        var folderToImages = imageEntries
+            .GroupBy(e => string.Join("/", e.PathParts))
+            .ToDictionary(
+                g => g.Key,
+                g => g.OrderBy(e =>
+                {
+                    var name = e.File.Name.ToLowerInvariant();
+                    var idx = Array.FindIndex(coverNames, c => c.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    return idx < 0 ? 9999 : idx;
+                }).ToList());
+
+        _logger.LogInformation("[COVERS] Found image files in {Count} album folder(s).", folderToImages.Count);
+
+        // Load all MediaItems that still have no valid cover
+        var nocover = await context.MediaItems
+            .AsNoTracking()
+            .Where(m => m.CoverPath == null || m.CoverPath == "")
+            .Select(m => new { m.Id, m.AlbumName, m.ArtistName, m.RutaArchivo })
+            .ToListAsync(ct);
+
+        // Build a path-key for each no-cover item by stripping the filename from RutaArchivo
+        // RutaArchivo is stored as "ArtistFolder/AlbumFolder/track.mp3"
+        var updates = new Dictionary<string, string>(); // driveId → cover driveId:XXX
+
+        foreach (var item in nocover)
+        {
+            // Derive the expected folder key from RutaArchivo
+            var parts = item.RutaArchivo?.Split('/');
+            string folderKey;
+            if (parts != null && parts.Length >= 2)
+                folderKey = string.Join("/", parts.Take(parts.Length - 1));
+            else
+                folderKey = item.AlbumName ?? "";
+
+            if (folderToImages.TryGetValue(folderKey, out var images) && images.Any())
+            {
+                var bestImage = images[0];
+                var coverValue = $"driveId:{bestImage.File.Id}";
+                updates[item.Id.ToString()] = coverValue;
+            }
+        }
+
+        if (!updates.Any())
+        {
+            _logger.LogInformation("[COVERS] No new cover assignments needed.");
+            return;
+        }
+
+        _logger.LogInformation("[COVERS] Assigning covers to {Count} media items...", updates.Count);
+
+        // Batch-update in groups of 100
+        var ids = updates.Keys.Select(int.Parse).ToList();
+        var items = await context.MediaItems
+            .Where(m => ids.Contains(m.Id))
+            .ToListAsync(ct);
+
+        foreach (var item in items)
+        {
+            if (updates.TryGetValue(item.Id.ToString(), out var cover))
+                item.CoverPath = cover;
+        }
+
+        await context.SaveChangesAsync(ct);
+        _logger.LogInformation("[COVERS] Cover assignment complete: {Count} items updated.", items.Count);
+    }
+
 
     private async Task FetchRecursive(DriveService service, string folderId, List<string> currentPath, List<DriveEntry> results, CancellationToken ct)
     {

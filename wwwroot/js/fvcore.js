@@ -829,12 +829,13 @@
         }
 
         const videoEl = container.querySelector('video');
-        if (videoEl) videoEl.src = `/stream/${videoId}`;
+        // Use the transcoding endpoint so AVI / MKV etc. are converted to browser-compatible MP4
+        if (videoEl) videoEl.src = `/Streaming/video/${videoId}`;
         const dlBtn = container.querySelector('#video-download-btn');
         if (dlBtn) {
             dlBtn.onclick = (e) => {
                 e.preventDefault();
-                window.location.href = `/Streaming/download/${videoId}`;
+                window.location.href = `/Streaming/download-file/${videoId}`;
             };
         }
         container.classList.add('active');
@@ -916,6 +917,16 @@
                 const row = document.querySelector(`tr[data-track-id="${trackId}"]`);
                 const favBtn = row ? row.querySelector('.btn-favorite') : null;
                 toggleFavorite(parseInt(trackId), favBtn);
+            }
+        });
+
+        // Individual track download
+        items.push({
+            icon: '⬇',
+            label: 'Descargar pista',
+            action: () => {
+                closeContextMenu();
+                window.location.href = `/Streaming/download-file/${trackId}`;
             }
         });
 
@@ -1455,8 +1466,9 @@
             if (!href || href.startsWith('#') || href.startsWith('javascript:') || link.target === '_blank' || link.hasAttribute('download')) return;
             if (link.hostname !== window.location.hostname && link.hostname !== '') return;
             
-            // Allow download endpoints to bypass SPA
-            if (href.toLowerCase().includes('/streaming/download')) return;
+            // Allow download endpoints and video stream to bypass SPA
+            if (href.toLowerCase().includes('/streaming/download') ||
+                href.toLowerCase().includes('/streaming/video')) return;
 
             e.preventDefault();
             navigateTo(href);
