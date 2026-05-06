@@ -218,11 +218,9 @@ public class ScannerService : IHostedService
         FvCoreDbContext context,
         CancellationToken ct)
     {
-        // Common cover art file names, in priority order
         var coverNames = new[] { "cover.jpg", "folder.jpg", "album.jpg", "front.jpg", "artwork.jpg",
                                   "cover.jpeg", "folder.jpeg", "cover.png", "folder.png" };
 
-        // Group image entries by their folder path (parent folder = album)
         var imageEntries = allEntries
             .Where(e => ImageExtensions.Contains(
                 Path.GetExtension(e.File.Name)?.ToLowerInvariant() ?? ""))
@@ -234,7 +232,7 @@ public class ScannerService : IHostedService
             return;
         }
 
-        // Build a lookup: folder-path-key → list of image files sorted by priority
+        // Build lookup: folder-path-key (e.g. "Artist/Album") → best image entry
         var folderToImages = imageEntries
             .GroupBy(e => string.Join("/", e.PathParts))
             .ToDictionary(
@@ -244,37 +242,61 @@ public class ScannerService : IHostedService
                     var name = e.File.Name.ToLowerInvariant();
                     var idx = Array.FindIndex(coverNames, c => c.Equals(name, StringComparison.OrdinalIgnoreCase));
                     return idx < 0 ? 9999 : idx;
-                }).ToList());
+                }).First());
 
-        _logger.LogInformation("[COVERS] Found image files in {Count} album folder(s).", folderToImages.Count);
+        // Build lookup by last path segment (album folder name) as fallback
+        var albumNameToImage = imageEntries
+            .GroupBy(e => e.PathParts.LastOrDefault() ?? "", StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                g => g.Key,
+                g => g.OrderBy(e =>
+                {
+                    var name = e.File.Name.ToLowerInvariant();
+                    var idx = Array.FindIndex(coverNames, c => c.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    return idx < 0 ? 9999 : idx;
+                }).First(),
+                StringComparer.OrdinalIgnoreCase);
 
-        // Load all MediaItems that still have no valid cover
+        _logger.LogInformation("[COVERS] Image folders found: {Count}. Starting cover assignment.", folderToImages.Count);
+
+        // FIX: Load items with NO valid cover — includes null, empty, and whitespace CoverPath.
+        // Also re-process items whose CoverPath doesn't start with "driveId:" or "http"
+        // (catches previously failed assignments).
         var nocover = await context.MediaItems
             .AsNoTracking()
-            .Where(m => m.CoverPath == null || m.CoverPath == "")
+            .Where(m => m.CoverPath == null
+                     || m.CoverPath == ""
+                     || m.CoverPath.Trim() == ""
+                     || (!m.CoverPath.StartsWith("driveId:") && !m.CoverPath.StartsWith("http")))
             .Select(m => new { m.Id, m.AlbumName, m.ArtistName, m.RutaArchivo })
             .ToListAsync(ct);
 
-        // Build a path-key for each no-cover item by stripping the filename from RutaArchivo
-        // RutaArchivo is stored as "ArtistFolder/AlbumFolder/track.mp3"
-        var updates = new Dictionary<string, string>(); // driveId → cover driveId:XXX
+        _logger.LogInformation("[COVERS] Items without valid cover: {Count}", nocover.Count);
+
+        var updates = new Dictionary<int, string>();
 
         foreach (var item in nocover)
         {
-            // Derive the expected folder key from RutaArchivo
-            var parts = item.RutaArchivo?.Split('/');
-            string folderKey;
-            if (parts != null && parts.Length >= 2)
-                folderKey = string.Join("/", parts.Take(parts.Length - 1));
-            else
-                folderKey = item.AlbumName ?? "";
+            DriveEntry? bestImage = null;
 
-            if (folderToImages.TryGetValue(folderKey, out var images) && images.Any())
+            // Strategy 1: exact folder-path match derived from RutaArchivo
+            var parts = item.RutaArchivo?.Split('/');
+            if (parts != null && parts.Length >= 2)
             {
-                var bestImage = images[0];
-                var coverValue = $"driveId:{bestImage.File.Id}";
-                updates[item.Id.ToString()] = coverValue;
+                var folderKey = string.Join("/", parts.Take(parts.Length - 1));
+                if (folderToImages.TryGetValue(folderKey, out var img1))
+                    bestImage = img1;
             }
+
+            // Strategy 2: fallback — match by AlbumName against the last segment of image path
+            if (bestImage == null && !string.IsNullOrWhiteSpace(item.AlbumName))
+            {
+                if (albumNameToImage.TryGetValue(item.AlbumName.Trim(), out var img2))
+                    bestImage = img2;
+            }
+
+            if (bestImage != null)
+                updates[item.Id] = $"driveId:{bestImage.File.Id}";
         }
 
         if (!updates.Any())
@@ -285,15 +307,14 @@ public class ScannerService : IHostedService
 
         _logger.LogInformation("[COVERS] Assigning covers to {Count} media items...", updates.Count);
 
-        // Batch-update in groups of 100
-        var ids = updates.Keys.Select(int.Parse).ToList();
+        var ids = updates.Keys.ToList();
         var items = await context.MediaItems
             .Where(m => ids.Contains(m.Id))
             .ToListAsync(ct);
 
         foreach (var item in items)
         {
-            if (updates.TryGetValue(item.Id.ToString(), out var cover))
+            if (updates.TryGetValue(item.Id, out var cover))
                 item.CoverPath = cover;
         }
 

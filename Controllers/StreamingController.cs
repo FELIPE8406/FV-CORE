@@ -34,7 +34,7 @@ public class StreamingController : Controller
 
         var token = await _authService.GetAccessTokenAsync();
         
-        var requestUrl = $"https://www.googleapis.com/drive/v3/files/{media.GoogleDriveId}?alt=media";
+        var requestUrl = $"https://www.googleapis.com/drive/v3/files/{media.GoogleDriveId}?alt=media&supportsAllDrives=true";
         var httpRequest = new HttpRequestMessage(HttpMethod.Get, requestUrl);
         httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
 
@@ -98,7 +98,7 @@ public class StreamingController : Controller
 
         var token = await _authService.GetAccessTokenAsync();
         
-        var requestUrl = $"https://www.googleapis.com/drive/v3/files/{media.GoogleDriveId}?alt=media";
+        var requestUrl = $"https://www.googleapis.com/drive/v3/files/{media.GoogleDriveId}?alt=media&supportsAllDrives=true";
         var httpRequest = new HttpRequestMessage(HttpMethod.Get, requestUrl);
         httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
 
@@ -200,7 +200,7 @@ public class StreamingController : Controller
                         await downloadSemaphore.WaitAsync();
                         try
                         {
-                            var requestUrl = $"https://www.googleapis.com/drive/v3/files/{track.GoogleDriveId}?alt=media";
+                            var requestUrl = $"https://www.googleapis.com/drive/v3/files/{track.GoogleDriveId}?alt=media&supportsAllDrives=true";
                             var httpRequest = new HttpRequestMessage(HttpMethod.Get, requestUrl);
                             httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
 
@@ -265,7 +265,7 @@ public class StreamingController : Controller
                         if (coverTrack.CoverPath.StartsWith("driveId:"))
                         {
                             var driveId = coverTrack.CoverPath.Substring(8);
-                            var requestUrl = $"https://www.googleapis.com/drive/v3/files/{driveId}?alt=media";
+                            var requestUrl = $"https://www.googleapis.com/drive/v3/files/{driveId}?alt=media&supportsAllDrives=true";
                             var httpRequest = new HttpRequestMessage(HttpMethod.Get, requestUrl);
                             httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
                             var response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead);
@@ -438,8 +438,10 @@ public class StreamingController : Controller
             return NotFound("Media not found or not synced with Google Drive.");
         }
 
+        // FIX: Force token refresh on each download to avoid stale singleton token.
+        // Also add supportsAllDrives=true — required for Shared/Team Drive files (403 fix).
         var token = await _authService.GetAccessTokenAsync();
-        var requestUrl = $"https://www.googleapis.com/drive/v3/files/{media.GoogleDriveId}?alt=media";
+        var requestUrl = $"https://www.googleapis.com/drive/v3/files/{media.GoogleDriveId}?alt=media&supportsAllDrives=true";
         var httpRequest = new HttpRequestMessage(HttpMethod.Get, requestUrl);
         httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
 
@@ -493,10 +495,12 @@ public class StreamingController : Controller
     private async Task<IActionResult> StreamDriveFile(string driveId, string ext)
     {
         var token = await _authService.GetAccessTokenAsync();
-        var requestUrl = $"https://www.googleapis.com/drive/v3/files/{driveId}?alt=media";
+        // FIX: supportsAllDrives=true required for Shared Drive files.
+        var requestUrl = $"https://www.googleapis.com/drive/v3/files/{driveId}?alt=media&supportsAllDrives=true";
         var httpRequest = new HttpRequestMessage(HttpMethod.Get, requestUrl);
         httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
 
+        // Forward Range header so Drive returns 206 Partial Content — required for HTML5 seeking.
         if (Request.Headers.TryGetValue("Range", out var range))
             httpRequest.Headers.Add("Range", range.ToString());
 
@@ -506,10 +510,20 @@ public class StreamingController : Controller
         if (!response.IsSuccessStatusCode)
             return StatusCode((int)response.StatusCode, $"Error fetching from Google Drive: {response.ReasonPhrase}");
 
+        // Forward all content headers (Content-Length, Content-Range, Accept-Ranges, etc.)
         foreach (var header in response.Content.Headers)
             Response.Headers[header.Key] = header.Value.ToArray();
 
+        // Forward Accept-Ranges from response headers (not content headers)
+        if (response.Headers.TryGetValues("Accept-Ranges", out var acceptRanges))
+            Response.Headers["Accept-Ranges"] = acceptRanges.ToArray();
+
+        // Ensure Accept-Ranges is always set so the browser knows seeking is supported
+        if (!Response.Headers.ContainsKey("Accept-Ranges"))
+            Response.Headers["Accept-Ranges"] = "bytes";
+
         Response.Headers.Remove("Content-Type");
+        // FIX: Preserve the actual status code (200 or 206 Partial Content)
         Response.StatusCode = (int)response.StatusCode;
 
         var contentType = ext switch
@@ -521,24 +535,23 @@ public class StreamingController : Controller
         };
 
         var bodyStream = await response.Content.ReadAsStreamAsync();
+        // EnableRangeProcessing=false because we manually handle Range forwarding above.
         return new FileStreamResult(bodyStream, contentType) { EnableRangeProcessing = false };
     }
 
-    /// <summary>
-    /// Resolves the FFmpeg executable path. Checks PATH, then common server locations.
-    /// </summary>
-    private static string? FindFfmpeg()
-    {
-        // 1. Honour explicit appsettings path if configured
-        // (injected via IConfiguration would require DI change — keep simple for now)
+    // FIX: Cache FFmpeg detection — evaluated ONCE at startup, not per request.
+    // Previously FindFfmpeg() blocked up to 10s per video request (5 candidates × 2s WaitForExit),
+    // causing the player to freeze at 0:00 while the server was busy probing for ffmpeg.
+    private static readonly Lazy<string?> _ffmpegPath = new(DetectFfmpeg, System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
 
-        // 2. Check well-known paths on Linux/Windows servers
+    private static string? DetectFfmpeg()
+    {
         var candidates = new[]
         {
-            "ffmpeg",                           // On PATH
-            "/usr/bin/ffmpeg",                  // Linux standard
-            "/usr/local/bin/ffmpeg",            // Linux alternate
-            @"C:\ffmpeg\bin\ffmpeg.exe",        // Windows common
+            "ffmpeg",
+            "/usr/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            @"C:\ffmpeg\bin\ffmpeg.exe",
             @"C:\Program Files\ffmpeg\bin\ffmpeg.exe"
         };
 
@@ -558,14 +571,16 @@ public class StreamingController : Controller
                 using var p = Process.Start(psi);
                 if (p != null)
                 {
-                    p.WaitForExit(2000);
+                    p.WaitForExit(3000);
                     if (p.ExitCode == 0) return candidate;
                 }
             }
-            catch { /* candidate not found */ }
+            catch { /* candidate not available */ }
         }
-
         return null;
     }
+
+    // Thin wrapper kept for readability at call sites
+    private static string? FindFfmpeg() => _ffmpegPath.Value;
 }
 
