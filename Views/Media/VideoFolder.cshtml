@@ -1,0 +1,102 @@
+@model IEnumerable<FvCore.Models.MediaItem>
+@{
+    ViewData["Title"] = ViewBag.FolderName ?? "Álbum";
+    var page = ViewBag.Page != null ? (int)ViewBag.Page : 1;
+    var totalPages = ViewBag.TotalPages != null ? (int)ViewBag.TotalPages : 1;
+    var totalItems = ViewBag.TotalItems != null ? (int)ViewBag.TotalItems : 0;
+    var firstVideoId = ViewBag.FirstVideoId != null ? (int)ViewBag.FirstVideoId : 0;
+}
+
+<div class="page-header" style="display:flex; justify-content:space-between; align-items:flex-start;">
+    <div>
+        <h2>@ViewBag.FolderName</h2>
+        <div class="page-subtitle">@totalItems.ToString("N0") videos en esta carpeta</div>
+    </div>
+    <div style="display:flex; gap: 10px;">
+        @if (firstVideoId > 0)
+        {
+            <a href="/Streaming/download-album/@firstVideoId" class="btn-neon" style="display: flex; align-items: center; gap: 5px;" title="Descargar todos los videos en un archivo ZIP">
+                ⬇ DESCARGAR CARPETA COMPLETA
+            </a>
+        }
+        <button class="btn-neon small" onclick="window.location.href='@Url.Action("Videos", "Media")'">← Volver a Carpetas</button>
+    </div>
+</div>
+
+<form method="get" class="search-bar">
+    <input type="text" name="search" id="search-input" value="@ViewBag.Search"
+           placeholder="Buscar videos en esta carpeta..." autocomplete="off" />
+    <button type="submit">⌕</button>
+</form>
+
+<!-- Inline Video Player -->
+<div id="video-player-container" class="video-player-container">
+    <button class="video-close">✕ CERRAR</button>
+    <video controls id="video-element"></video>
+</div>
+
+@if (Model.Any())
+{
+    <div class="video-grid">
+        @foreach (var video in Model)
+        {
+            <div class="video-card" data-video-id="@video.Id" data-title="@video.Titulo">
+                <div class="video-thumb">
+                    🎬
+                    <div class="play-overlay">
+                        <span style="font-size: 3rem; color: var(--neon-green, #00FF00);">▶</span>
+                    </div>
+                </div>
+                <div class="video-info">
+                    <div class="video-title" title="@video.Titulo">@video.Titulo</div>
+                    <div class="video-meta">
+                        <span>@(video.Calidad ?? "SD")</span>
+                    </div>
+                    <div class="video-actions-row" style="margin-top:8px; display:flex; gap:8px;">
+                        <a href="/Streaming/download-file/@video.Id"
+                           class="btn-neon small"
+                           style="background: transparent; border: 1px solid var(--neon-green, #00FF00); color: var(--neon-green, #00FF00);"
+                           title="Descargar video en formato original"
+                           onclick="event.stopPropagation();">
+                            ⬇ DESCARGAR VIDEO
+                        </a>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+
+    @if (totalPages > 1)
+    {
+        <div class="pagination">
+            @if (page > 1)
+            {
+                <a href="@Url.Action("VideoFolder", "Media", new { folderName = ViewBag.FolderName, search = ViewBag.Search, page = page - 1 })">← Anterior</a>
+            }
+
+            @for (int p = Math.Max(1, page - 3); p <= Math.Min(totalPages, page + 3); p++)
+            {
+                if (p == page)
+                {
+                    <span class="current">@p</span>
+                }
+                else
+                {
+                    <a href="@Url.Action("VideoFolder", "Media", new { folderName = ViewBag.FolderName, search = ViewBag.Search, page = p })">@p</a>
+                }
+            }
+
+            @if (page < totalPages)
+            {
+                <a href="@Url.Action("VideoFolder", "Media", new { folderName = ViewBag.FolderName, search = ViewBag.Search, page = page + 1 })">Siguiente →</a>
+            }
+        </div>
+    }
+}
+else
+{
+    <div class="empty-state">
+        <div class="empty-icon">▶</div>
+        <div class="empty-text">No se encontraron videos en esta carpeta</div>
+    </div>
+}

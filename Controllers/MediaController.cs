@@ -73,30 +73,80 @@ public class MediaController : Controller
 
     public async Task<IActionResult> Videos(string? search, int page = 1)
     {
-        const int pageSize = 10;
+        // ── Fetch only the columns we need – avoids the EF Core GroupBy translation bug ──
+        var rawQuery = _context.MediaItems
+            .AsNoTracking()
+            .Where(m => m.Tipo == MediaType.Video && m.AlbumName != null)
+            .Select(m => new { m.Id, m.AlbumName, m.Titulo });
+
+        if (!string.IsNullOrWhiteSpace(search))
+            rawQuery = rawQuery.Where(m => m.AlbumName!.Contains(search));
+
+        var allVideos = await rawQuery.ToListAsync();
+
+        // ── Group in memory – 100% safe, no SQL translation issues ──
+        var folders = allVideos
+            .GroupBy(m => m.AlbumName!)
+            .Select(g => new VideoFolderViewModel
+            {
+                FolderName   = g.Key,
+                VideoCount   = g.Count(),
+                FirstVideoId = g.OrderBy(v => v.Titulo).First().Id
+            })
+            .OrderBy(f => f.FolderName)
+            .ToList();
+
+        const int pageSize  = 12;
+        var totalItems      = folders.Count;
+        var totalPages      = (int)Math.Ceiling(totalItems / (double)pageSize);
+
+        var pagedFolders = folders
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToList();
+
+        ViewBag.Search     = search;
+        ViewBag.Page       = page;
+        ViewBag.TotalPages = totalPages;
+        ViewBag.TotalItems = totalItems;
+
+        return View(pagedFolders);
+    }
+
+    [HttpGet("Media/VideoFolder")]
+    public async Task<IActionResult> VideoFolder(string folderName, string? search, int page = 1)
+    {
+        if (string.IsNullOrEmpty(folderName)) return RedirectToAction("Videos");
+
+        const int pageSize = 12;
 
         var query = _context.MediaItems
             .AsNoTracking()
-            .Where(m => m.Tipo == MediaType.Video)
+            .Where(m => m.Tipo == MediaType.Video && m.AlbumName == folderName)
             .AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(search))
-            query = query.Where(m => m.Titulo.Contains(search) || (m.AlbumName != null && m.AlbumName.Contains(search)));
+            query = query.Where(m => m.Titulo.Contains(search));
 
         var totalItems = await query.CountAsync();
         var totalPages = (int)Math.Ceiling(totalItems / (double)pageSize);
 
         var videos = await query
-            .OrderBy(m => m.AlbumName).ThenBy(m => m.Titulo)
+            .OrderBy(m => m.Titulo)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync();
 
+        ViewBag.FolderName = folderName;
         ViewBag.Search = search;
         ViewBag.Page = page;
         ViewBag.TotalPages = totalPages;
         ViewBag.TotalItems = totalItems;
         
+        // Find the first video ID for the folder download feature
+        var firstVideo = await _context.MediaItems.FirstOrDefaultAsync(m => m.Tipo == MediaType.Video && m.AlbumName == folderName);
+        ViewBag.FirstVideoId = firstVideo?.Id;
+
         return View(videos);
     }
 
@@ -214,4 +264,11 @@ public class MediaController : Controller
 public class ToggleFavoriteRequest
 {
     public int Id { get; set; }
+}
+
+public class VideoFolderViewModel
+{
+    public string FolderName { get; set; } = string.Empty;
+    public int VideoCount { get; set; }
+    public int FirstVideoId { get; set; }
 }
