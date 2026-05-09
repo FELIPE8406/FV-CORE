@@ -34,6 +34,7 @@ public class MediaItem
     public string? Calidad { get; set; }
 
     public bool IsFavorite { get; set; }
+    public bool IsHidden { get; set; }
 
     [MaxLength(300)]
     public string? AlbumName { get; set; }

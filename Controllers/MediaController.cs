@@ -25,7 +25,7 @@ public class MediaController : Controller
             var query = _context.MediaItems
                 .AsNoTracking()
                 .Include(m => m.Artist)
-                .Where(m => m.Tipo == MediaType.Audio)
+                .Where(m => m.Tipo == MediaType.Audio && !m.IsHidden)
                 .AsQueryable();
 
             if (!string.IsNullOrWhiteSpace(search))
@@ -76,7 +76,7 @@ public class MediaController : Controller
         // ── Fetch only the columns we need – avoids the EF Core GroupBy translation bug ──
         var rawQuery = _context.MediaItems
             .AsNoTracking()
-            .Where(m => m.Tipo == MediaType.Video && m.AlbumName != null)
+            .Where(m => m.Tipo == MediaType.Video && m.AlbumName != null && !m.IsHidden)
             .Select(m => new { m.Id, m.AlbumName, m.Titulo });
 
         if (!string.IsNullOrWhiteSpace(search))
@@ -122,7 +122,7 @@ public class MediaController : Controller
 
         var query = _context.MediaItems
             .AsNoTracking()
-            .Where(m => m.Tipo == MediaType.Video && m.AlbumName == folderName)
+            .Where(m => m.Tipo == MediaType.Video && m.AlbumName == folderName && !m.IsHidden)
             .AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(search))
@@ -160,6 +160,18 @@ public class MediaController : Controller
         await _context.SaveChangesAsync();
 
         return Json(new { success = true, isFavorite = media.IsFavorite });
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> ToggleHidden([FromBody] ToggleHiddenRequest request)
+    {
+        var media = await _context.MediaItems.FindAsync(request.Id);
+        if (media == null) return NotFound();
+
+        media.IsHidden = !media.IsHidden;
+        await _context.SaveChangesAsync();
+
+        return Json(new { success = true, isHidden = media.IsHidden });
     }
 
     [HttpPost("Media/Sync")]
@@ -262,6 +274,11 @@ public class MediaController : Controller
 
 
 public class ToggleFavoriteRequest
+{
+    public int Id { get; set; }
+}
+
+public class ToggleHiddenRequest
 {
     public int Id { get; set; }
 }

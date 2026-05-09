@@ -315,11 +315,11 @@ public class StreamingController : Controller
         {
             FileName = ffmpegPath,
             // -i pipe:0   → read input from stdin
-            // -c:v libx264 -preset ultrafast -crf 23  → fast H.264 encode
-            // -c:a aac -b:a 128k                       → AAC audio
+            // -c:v libx264 -preset superfast -crf 18  → Higher quality H.264 encode (visually lossless-ish)
+            // -c:a aac -b:a 192k                       → Better AAC audio
             // -movflags frag_keyframe+empty_moov+faststart → streaming-compatible MP4
             // -f mp4 pipe:1                             → write MP4 to stdout
-            Arguments = "-i pipe:0 -c:v libx264 -preset ultrafast -crf 23 -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+faststart -f mp4 pipe:1",
+            Arguments = "-i pipe:0 -c:v libx264 -preset superfast -crf 18 -c:a aac -b:a 192k -movflags frag_keyframe+empty_moov+faststart -f mp4 pipe:1",
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = false,

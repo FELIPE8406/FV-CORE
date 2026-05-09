@@ -24,7 +24,11 @@
 
     // ── State ──
     const state = {
-        audio: new Audio(),
+        audioA: new Audio(),
+        audioB: new Audio(),
+        activeAudio: null,   // Points to audioA or audioB
+        nextAudio: null,     // Points to the other one
+        
         currentTrackId: null,
         currentTitle: '',
         currentArtist: '',
@@ -33,19 +37,26 @@
         playlist: [],        // Local queue (manual)
         playlistIndex: -1,
         
-        // Phase 4: Album Accordion Store
-        libraryQueue: window.__GLOBAL_TRACK_STORE || [],    // The "source" list from __GLOBAL_TRACK_STORE or DOM
+        libraryQueue: window.__GLOBAL_TRACK_STORE || [],
         libraryIndex: -1,
         
         volume: 0.8,
         shuffle: false,
         shuffledQueue: [],
         shuffleIndex: -1,
-        repeat: 'off',       // 'off' | 'all' | 'one'
+        repeat: 'off',
         nowPlayingOpen: false,
         autoplay: true,
-        isFetchingSuggestions: false,
+        
+        // Crossfade & Prefetch (Phase 7)
+        isNextPreloaded: false,
+        isCrossfading: false,
+        crossfadeDuration: 3, // seconds
+        prefetchThreshold: 15, // seconds
     };
+    
+    state.activeAudio = state.audioA;
+    state.nextAudio = state.audioB;
 
     // ── Local Color Cache ──
     const colorCache = new Map();
@@ -111,20 +122,35 @@
     initBackNavigation();
     initSPA();
 
-    // Initial Audio Listeners (moved outside initApp to avoid duplicates if initApp is called multiple times)
-    state.audio.addEventListener('timeupdate', updateProgress);
-    state.audio.addEventListener('ended', onAudioEnded);
-    state.audio.addEventListener('loadedmetadata', () => {
-        updateDuration();
-        updateMediaSessionPositionState();
-    });
-    state.audio.addEventListener('play', () => {
-        state.isPlaying = true;
-        syncPlayState(true);
-    });
-    state.audio.addEventListener('pause', () => {
-        state.isPlaying = false;
-        syncPlayState(false);
+    // Initial Audio Listeners
+    [state.audioA, state.audioB].forEach(audio => {
+        audio.addEventListener('timeupdate', () => {
+            if (state.activeAudio === audio) updateProgress();
+        });
+        audio.addEventListener('ended', () => {
+            if (state.activeAudio === audio) onAudioEnded();
+        });
+        audio.addEventListener('loadedmetadata', () => {
+            if (state.activeAudio === audio) {
+                updateDuration();
+                updateMediaSessionPositionState();
+            }
+        });
+        audio.addEventListener('play', () => {
+            if (state.activeAudio === audio) {
+                state.isPlaying = true;
+                syncPlayState(true);
+            }
+        });
+        audio.addEventListener('pause', () => {
+            if (state.activeAudio === audio) {
+                // Only sync pause if we aren't crossfading (where activeAudio is swapping)
+                if (!state.isCrossfading) {
+                    state.isPlaying = false;
+                    syncPlayState(false);
+                }
+            }
+        });
     });
 
     // Hybrid SPA Navigation Interceptor
@@ -183,7 +209,20 @@
         }
     }
 
-    function playTrack(trackId, title, artist, coverId) {
+    function playTrack(trackId, title, artist, coverId, isPrefetch = false) {
+        if (isPrefetch) {
+            debugLog("Prefetching track:", trackId);
+            state.nextAudio.src = `/stream/${trackId}`;
+            state.nextAudio.volume = 0;
+            state.nextAudio.load();
+            state.isNextPreloaded = true;
+            return;
+        }
+
+        // Cancel any active crossfade when a manual play starts
+        state.isCrossfading = false;
+        state.isNextPreloaded = false;
+
         state.currentTrackId = trackId;
         state.currentTitle = title || 'Pista Desconocida';
         state.currentArtist = artist || 'Artista Desconocido';
@@ -192,12 +231,13 @@
         // Sync state index
         state.libraryIndex = state.libraryQueue.findIndex(t => t.id == trackId);
 
-        // Pause/reset before loading new source
-        state.audio.pause();
-        state.audio.src = `/stream/${trackId}`;
-        state.audio.load();
+        // Standard Play (No Crossfade)
+        state.activeAudio.pause();
+        state.activeAudio.volume = state.volume;
+        state.activeAudio.src = `/stream/${trackId}`;
+        state.activeAudio.load();
 
-        const playPromise = state.audio.play();
+        const playPromise = state.activeAudio.play();
         if (playPromise !== undefined) {
             playPromise.catch(error => {
                 if (error.name !== 'AbortError') {
@@ -242,10 +282,22 @@
     function togglePlay() {
         if (!state.currentTrackId) return;
         if (state.isPlaying) {
-            state.audio.pause();
+            pauseAudio();
         } else {
-            state.audio.play().catch(() => {});
+            playAudio();
         }
+    }
+
+    function pauseAudio() {
+        state.activeAudio.pause();
+        state.isPlaying = false;
+        syncPlayState(false);
+    }
+
+    function playAudio() {
+        state.activeAudio.play().catch(() => {});
+        state.isPlaying = true;
+        syncPlayState(true);
     }
 
     function syncPlayState(playing) {
@@ -324,7 +376,7 @@
         try {
             navigator.mediaSession.setActionHandler('seekto', (details) => {
                 if (details.seekTime != null) {
-                    state.audio.currentTime = details.seekTime;
+                    state.activeAudio.currentTime = details.seekTime;
                     updateMediaSessionPositionState();
                 }
             });
@@ -340,21 +392,23 @@
 
     function updateMediaSessionPositionState() {
         if (!('mediaSession' in navigator)) return;
-        if (!state.audio.duration || isNaN(state.audio.duration)) return;
+        if (!state.activeAudio.duration || isNaN(state.activeAudio.duration)) return;
         try {
             navigator.mediaSession.setPositionState({
-                duration: state.audio.duration,
-                playbackRate: state.audio.playbackRate || 1,
-                position: Math.min(state.audio.currentTime, state.audio.duration)
+                duration: state.activeAudio.duration,
+                playbackRate: state.activeAudio.playbackRate || 1,
+                position: Math.min(state.activeAudio.currentTime, state.activeAudio.duration)
             });
         } catch (e) { /* setPositionState not supported */ }
     }
 
     // ── Audio ended handler ──
     function onAudioEnded() {
+        if (state.isCrossfading) return; // Handled by crossfade logic
+
         if (state.repeat === 'one') {
-            state.audio.currentTime = 0;
-            state.audio.play().catch(() => {});
+            state.activeAudio.currentTime = 0;
+            state.activeAudio.play().catch(() => {});
             return;
         }
         playNext();
@@ -400,8 +454,8 @@
     }
 
     function playPrevious() {
-        if (state.audio.currentTime > 3) {
-            state.audio.currentTime = 0;
+        if (state.activeAudio.currentTime > 3) {
+            state.activeAudio.currentTime = 0;
             return;
         }
 
@@ -425,16 +479,43 @@
     function triggerTrackRow(row) {
         if (!row) return;
         const trackId = row.dataset.trackId;
-        const title = row.dataset.title;
-        const artist = row.dataset.artist;
-        const coverId = row.dataset.coverId || trackId;
-        playTrack(trackId, title, artist, coverId);
+        
+        // ── Context Logic (Phase 6) ──
+        // Find the nearest container (Table or Accordion Body)
+        const container = row.closest('tbody') || row.closest('.track-list') || document;
+        const rows = Array.from(container.querySelectorAll('tr[data-track-id]'));
+        
+        const newQueue = rows.map(r => ({
+            id: r.dataset.trackId,
+            titulo: r.dataset.title || r.querySelector('.track-title')?.textContent || '—',
+            artist: r.dataset.artist || r.querySelector('.track-artist')?.textContent || '—',
+            coverId: r.dataset.coverId || r.dataset.trackId,
+            album: r.dataset.album || r.querySelector('.track-album')?.textContent || '—'
+        }));
+
+        // Replace library queue with current context
+        state.libraryQueue = newQueue;
+        state.libraryIndex = newQueue.findIndex(t => t.id == trackId);
+        
+        // Flush manual playlist (Queue Flush)
+        state.playlist = [];
+        state.playlistIndex = -1;
+        saveQueue(); // Persist empty queue
+
+        // If shuffle is active, rebuild the shuffled sequence for this new context
+        if (state.shuffle) {
+            state.shuffledQueue = buildShuffledQueue(state.libraryQueue.length);
+            // Move current track to the front of shuffle or just find its new index
+            state.shuffleIndex = state.shuffledQueue.indexOf(state.libraryIndex);
+        }
+
+        const track = newQueue[state.libraryIndex];
+        playTrack(track.id, track.titulo, track.artist, track.coverId);
     }
 
     function triggerTrackData(track) {
         if (!track) return;
-        // Map store keys to playTrack
-        playTrack(track.id, track.titulo, track.artist, track.coverId || track.id);
+        playTrack(track.id, track.titulo || track.title, track.artist, track.coverId || track.id);
     }
 
     // ── Shuffle ──
@@ -464,16 +545,36 @@
     }
 
     function shufflePlay() {
+        // If we are in a view with tracks, capture them as context
+        const rows = Array.from(document.querySelectorAll('tr[data-track-id]'));
+        if (rows.length > 0) {
+            state.libraryQueue = rows.map(r => ({
+                id: r.dataset.trackId,
+                titulo: r.dataset.title || '—',
+                artist: r.dataset.artist || '—',
+                coverId: r.dataset.coverId || r.dataset.trackId
+            }));
+        }
+
         if (state.libraryQueue.length === 0) return;
+        
         state.shuffle = true;
         document.querySelectorAll('#player-shuffle, #np-shuffle-btn').forEach(btn => {
             btn.classList.add('active');
             btn.title = 'Aleatorio: Activado';
         });
+        
+        // Flush manual queue
+        state.playlist = [];
+        state.playlistIndex = -1;
+        saveQueue();
+
         state.shuffledQueue = buildShuffledQueue(state.libraryQueue.length);
         state.shuffleIndex = 0;
-        triggerTrackData(state.libraryQueue[state.shuffledQueue[0]]);
-        showToast('🔀 Reproduciendo aleatoriamente');
+        const firstShuffleIdx = state.shuffledQueue[0];
+        state.libraryIndex = firstShuffleIdx;
+        triggerTrackData(state.libraryQueue[firstShuffleIdx]);
+        showToast('🔀 Reproduciendo contexto aleatoriamente');
     }
 
     // ── Repeat ──
@@ -498,10 +599,13 @@
 
     // ── Progress ──
     function updateProgress() {
-        if (!state.audio.duration) return;
-        const percent = (state.audio.currentTime / state.audio.duration) * 100;
+        if (!state.activeAudio.duration) return;
+        const duration = state.activeAudio.duration;
+        const currentTime = state.activeAudio.currentTime;
+        const percent = (currentTime / duration) * 100;
+
         if (progressFill) progressFill.style.width = percent + '%';
-        if (timeCurrentEl) timeCurrentEl.textContent = formatTime(state.audio.currentTime);
+        if (timeCurrentEl) timeCurrentEl.textContent = formatTime(currentTime);
 
         // Now Playing seek bar
         const npFill = document.getElementById('np-seek-fill');
@@ -509,20 +613,140 @@
         const npCur = document.getElementById('np-cur-time');
         if (npFill) npFill.style.width = percent + '%';
         if (npThumb) npThumb.style.left = percent + '%';
-        if (npCur) npCur.textContent = formatTime(state.audio.currentTime);
+        if (npCur) npCur.textContent = formatTime(currentTime);
+
+        // ── Phase 7: Crossfade & Prefetch ──
+        if (duration > 20) { // Only crossfade songs of decent length
+            const timeLeft = duration - currentTime;
+
+            // 1. Prefetch next track (15s before end)
+            if (timeLeft <= state.prefetchThreshold && !state.isNextPreloaded && !state.isCrossfading) {
+                prefetchNextTrack();
+            }
+
+            // 2. Start Crossfade (3s before end)
+            if (timeLeft <= state.crossfadeDuration && !state.isCrossfading && state.isNextPreloaded) {
+                startCrossfade();
+            }
+        }
+    }
+
+    function prefetchNextTrack() {
+        const nextTrack = getNextTrackData();
+        if (nextTrack) {
+            playTrack(nextTrack.id, nextTrack.titulo, nextTrack.artist, nextTrack.coverId, true);
+        }
+    }
+
+    function getNextTrackData() {
+        // Manual queue check
+        if (state.playlist && state.playlist.length > 0 && state.playlistIndex < state.playlist.length - 1) {
+            return state.playlist[state.playlistIndex + 1];
+        }
+        // Library queue check
+        const tracks = state.libraryQueue;
+        if (tracks.length === 0) return null;
+
+        if (state.shuffle) {
+            let sIdx = state.shuffleIndex + 1;
+            if (sIdx >= state.shuffledQueue.length) sIdx = 0;
+            return tracks[state.shuffledQueue[sIdx]];
+        }
+
+        let nIdx = state.libraryIndex + 1;
+        if (nIdx >= tracks.length) {
+            if (state.repeat === 'all') nIdx = 0;
+            else return null;
+        }
+        return tracks[nIdx];
+    }
+
+    async function startCrossfade() {
+        state.isCrossfading = true;
+        const oldAudio = state.activeAudio;
+        const newAudio = state.nextAudio;
+        
+        debugLog("Starting Crossfade...");
+
+        // Update state metadata for the incoming track immediately
+        const nextData = getNextTrackData();
+        if (nextData) {
+            state.currentTrackId = nextData.id;
+            state.currentTitle = nextData.titulo;
+            state.currentArtist = nextData.artist;
+            state.currentCoverId = nextData.coverId || nextData.id;
+            state.libraryIndex = state.libraryQueue.findIndex(t => t.id == nextData.id);
+            
+            // If it was from manual queue, advance index
+            if (state.playlist && state.playlist.length > 0 && state.playlistIndex < state.playlist.length - 1) {
+                state.playlistIndex++;
+            } else if (state.shuffle) {
+                state.shuffleIndex++;
+                if (state.shuffleIndex >= state.shuffledQueue.length) state.shuffleIndex = 0;
+            }
+            
+            updateMediaSession();
+            syncNowPlayingUI();
+        }
+
+        // Start playing new track at 0 volume
+        newAudio.volume = 0;
+        await newAudio.play();
+
+        const steps = 30; // 3 seconds at 100ms intervals
+        const stepTime = 100;
+        const volumeStep = state.volume / steps;
+
+        let currentStep = 0;
+        const interval = setInterval(() => {
+            currentStep++;
+            
+            // Fade In new
+            newAudio.volume = Math.min(state.volume, newAudio.volume + volumeStep);
+            
+            // Fade Out old
+            oldAudio.volume = Math.max(0, oldAudio.volume - volumeStep);
+
+            if (currentStep >= steps) {
+                clearInterval(interval);
+                finishCrossfade(oldAudio, newAudio);
+            }
+        }, stepTime);
+    }
+
+    function finishCrossfade(oldAudio, newAudio) {
+        oldAudio.pause();
+        oldAudio.src = ""; // Flush memory
+        oldAudio.volume = state.volume;
+        
+        // Swap references
+        state.activeAudio = newAudio;
+        state.nextAudio = oldAudio;
+        
+        state.isCrossfading = false;
+        state.isNextPreloaded = false;
+        
+        debugLog("Crossfade complete.");
+        
+        // Highlight new track in UI
+        document.querySelectorAll('.track-list tbody tr').forEach(tr => {
+            tr.classList.remove('playing');
+        });
+        const activeRow = document.querySelector(`tr[data-track-id="${state.currentTrackId}"]`);
+        if (activeRow) activeRow.classList.add('playing');
     }
 
     function updateDuration() {
-        if (timeTotalEl) timeTotalEl.textContent = formatTime(state.audio.duration);
+        if (timeTotalEl) timeTotalEl.textContent = formatTime(state.activeAudio.duration);
         const npDur = document.getElementById('np-dur-time');
-        if (npDur) npDur.textContent = formatTime(state.audio.duration);
+        if (npDur) npDur.textContent = formatTime(state.activeAudio.duration);
     }
 
     function seekTo(e) {
-        if (!state.audio.duration) return;
+        if (!state.activeAudio.duration) return;
         const rect = progressContainer.getBoundingClientRect();
         const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-        state.audio.currentTime = percent * state.audio.duration;
+        state.activeAudio.currentTime = percent * state.activeAudio.duration;
     }
 
     function formatTime(seconds) {
@@ -659,10 +883,10 @@
         const npSeek = document.getElementById('np-seek-track');
         if (npSeek) {
             npSeek.addEventListener('click', (e) => {
-                if (!state.audio.duration) return;
+                if (!state.activeAudio.duration) return;
                 const rect = npSeek.getBoundingClientRect();
                 const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-                state.audio.currentTime = percent * state.audio.duration;
+                state.activeAudio.currentTime = percent * state.activeAudio.duration;
             });
         }
 
@@ -722,16 +946,16 @@
         if (npDl) npDl.href = `/Streaming/download/${state.currentTrackId}`;
 
         // Progress
-        if (state.audio.duration) {
-            const pct = (state.audio.currentTime / state.audio.duration) * 100;
+        if (state.activeAudio.duration) {
+            const pct = (state.activeAudio.currentTime / state.activeAudio.duration) * 100;
             const npFill = document.getElementById('np-seek-fill');
             const npThumb = document.getElementById('np-seek-thumb');
             if (npFill) npFill.style.width = pct + '%';
             if (npThumb) npThumb.style.left = pct + '%';
             const npCur = document.getElementById('np-cur-time');
             const npDur = document.getElementById('np-dur-time');
-            if (npCur) npCur.textContent = formatTime(state.audio.currentTime);
-            if (npDur) npDur.textContent = formatTime(state.audio.duration);
+            if (npCur) npCur.textContent = formatTime(state.activeAudio.currentTime);
+            if (npDur) npDur.textContent = formatTime(state.activeAudio.duration);
         }
     }
 
@@ -1335,12 +1559,25 @@
             // 10.6 Doble click -> reproducir primera canción
             h.addEventListener('dblclick', function(e) {
                 e.preventDefault();
-                const album = this.dataset.album;
-                const artist = this.dataset.artist;
-                if (!window.__GLOBAL_TRACK_STORE) return;
-                const tracks = window.__GLOBAL_TRACK_STORE.filter(t => t.album === album && t.artist === artist);
-                if(tracks.length > 0) {
-                    playTrack(tracks[0].id, tracks[0].title, tracks[0].artist);
+                // Find first track in this accordion's body
+                const bodyId = this.dataset.bodyId;
+                const body = document.getElementById(bodyId);
+                const firstRow = body?.querySelector('tr[data-track-id]');
+                if (firstRow) {
+                    triggerTrackRow(firstRow);
+                } else {
+                    // Fallback to store
+                    const album = this.dataset.album;
+                    const artist = this.dataset.artist;
+                    if (!window.__GLOBAL_TRACK_STORE) return;
+                    const tracks = window.__GLOBAL_TRACK_STORE.filter(t => t.album === album && t.artist === artist);
+                    if(tracks.length > 0) {
+                        state.libraryQueue = tracks;
+                        state.libraryIndex = 0;
+                        state.playlist = [];
+                        saveQueue();
+                        triggerTrackData(tracks[0]);
+                    }
                 }
             });
         });
@@ -1417,7 +1654,6 @@
         }
     }
 
-    // (Exports moved to the bottom of the file to prevent closure before end)
 
     // ══════════════════════════════════════
     //  SEARCH
@@ -2146,14 +2382,18 @@
         openContextMenu,
         reloadQueueFromStore,
         togglePlay,
+        pauseAudio,
+        playAudio,
         playNext,
         playPrevious,
+        navigateTo,
         // New Playlist Actions
         togglePlaylistMenu,
         openRenamePlaylistModal,
         closeRenamePlaylistModal,
         savePlaylistRename,
-        confirmDeletePlaylist
+        confirmDeletePlaylist,
+        get state() { return state; }
     };
 
     // Service Worker Registration (PWA Support)

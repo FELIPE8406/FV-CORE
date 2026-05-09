@@ -109,6 +109,16 @@ public class ScannerService : IHostedService
             .Where(m => m.GoogleDriveId != null)
             .ToDictionaryAsync(m => m.GoogleDriveId!, m => m, cancellationToken);
             
+        // Delete items that no longer exist in Drive
+        var driveIds = mediaEntries.Select(e => e.File.Id).ToHashSet();
+        var toDelete = existingItems.Values.Where(m => !driveIds.Contains(m.GoogleDriveId!)).ToList();
+        if (toDelete.Any())
+        {
+            _logger.LogInformation("ELIMINANDO {Count} ARCHIVOS INEXISTENTES EN DRIVE", toDelete.Count);
+            context.MediaItems.RemoveRange(toDelete);
+            await context.SaveChangesAsync(cancellationToken);
+        }
+
         var existingArtists = await context.Artists.ToDictionaryAsync(a => a.Nombre, a => a, StringComparer.OrdinalIgnoreCase, cancellationToken);
 
         int inserted = 0, updated = 0, batchCount = 0;
@@ -145,11 +155,18 @@ public class ScannerService : IHostedService
                         
             if (existingItems.TryGetValue(file.Id, out var item))
             {
-                if (!force && item.AlbumName == finalAlbum && item.ArtistName == finalArtist && item.Titulo == finalTitle) continue;
+                if (!force && item.AlbumName == finalAlbum && item.ArtistName == finalArtist && item.Titulo == finalTitle && (item.CoverPath != null || !isVideo)) continue;
 
                 item.Titulo = finalTitle;
                 item.AlbumName = finalAlbum;
                 item.ArtistName = finalArtist;
+                
+                // Priority 2: Use video thumbnail if no cover exists yet
+                if (isVideo && (string.IsNullOrEmpty(item.CoverPath) || item.CoverPath.StartsWith("https://lh3.googleusercontent.com")))
+                {
+                    item.CoverPath = file.ThumbnailLink;
+                }
+                
                 updated++;
             }
             else
@@ -174,7 +191,9 @@ public class ScannerService : IHostedService
                     Artist = artistObj,
                     Genero = isVideo ? "Video" : _genreClassifier.GetGenreFromAI(file.Name, finalArtist, finalAlbum),
                     Calidad = type == MediaType.Audio ? GuessAudioQuality(file.Size) : GuessVideoQuality(file.Size),
-                    IsFavorite = false
+                    IsFavorite = false,
+                    IsHidden = false,
+                    CoverPath = isVideo ? file.ThumbnailLink : null // Priority 2 fallback
                 };
                 context.MediaItems.Add(newItem);
                 inserted++;
@@ -268,6 +287,7 @@ public class ScannerService : IHostedService
 
         var nocover = allCandidates
             .Where(m => string.IsNullOrWhiteSpace(m.CoverPath) ||
+                        m.CoverPath.StartsWith("https://lh3.googleusercontent.com") || // Overwrite auto-thumbnails with folder images (Priority 1)
                         (!m.CoverPath.StartsWith("driveId:") && !m.CoverPath.StartsWith("http")))
             .ToList();
 
@@ -334,7 +354,7 @@ public class ScannerService : IHostedService
             {
                 var request = service.Files.List();
                 request.Q = $"'{folderId}' in parents and trashed = false";
-                request.Fields = "nextPageToken, files(id, name, mimeType, size)";
+                request.Fields = "nextPageToken, files(id, name, mimeType, size, thumbnailLink)";
                 request.PageToken = pageToken;
                 request.PageSize = 1000;
                 request.SupportsAllDrives = true;
@@ -456,6 +476,11 @@ public class ScannerService : IHostedService
                 IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'MediaItems' AND COLUMN_NAME = 'ArtistName')
                 BEGIN
                     ALTER TABLE MediaItems ADD ArtistName NVARCHAR(300) NULL;
+                END
+
+                IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'MediaItems' AND COLUMN_NAME = 'IsHidden')
+                BEGIN
+                    ALTER TABLE MediaItems ADD IsHidden BIT NOT NULL DEFAULT 0;
                 END
             ", ct);
         }

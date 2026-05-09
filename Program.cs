@@ -71,6 +71,16 @@ using (var scope = app.Services.CreateScope())
                                                   N' ADD ' + QUOTENAME(@columnName) + N' NVARCHAR(300) NULL';
                 EXEC sp_executesql @sqlAlter;
             END
+
+            IF NOT EXISTS (
+                SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = @tableName AND COLUMN_NAME = 'IsHidden'
+            )
+            BEGIN
+                DECLARE @sqlHidden NVARCHAR(MAX) = N'ALTER TABLE [dbo].' + QUOTENAME(@tableName) + 
+                                                   N' ADD [IsHidden] BIT NOT NULL DEFAULT 0';
+                EXEC sp_executesql @sqlHidden;
+            END
         ", indexName, tableName, columnName);
         logger.LogInformation("Database integrity checks passed/applied at startup using parameterized queries.");
     }

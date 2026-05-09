@@ -50,7 +50,13 @@
                                   this.style.boxShadow='none';
                                   this.style.borderColor='rgba(0,255,0,0.15)';">
 
-                    <div style="font-size: 3.5rem; line-height: 1;">🎬</div>
+                    <div style="width: 120px; height: 160px; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: 6px; background: rgba(0,0,0,0.3); border: 1px solid rgba(0,255,0,0.1);">
+                        <img src="/cover/@folder.FirstVideoId" 
+                             alt="@folder.FolderName" 
+                             style="width: 100%; height: 100%; object-fit: cover;" 
+                             onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" />
+                        <div style="font-size: 3rem; display: none;">🎬</div>
+                    </div>
 
                     <div style="font-weight: 700;
                                 font-size: 0.95rem;

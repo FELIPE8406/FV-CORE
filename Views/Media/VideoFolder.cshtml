@@ -31,8 +31,13 @@
 
 <!-- Inline Video Player -->
 <div id="video-player-container" class="video-player-container">
-    <button class="video-close">✕ CERRAR</button>
-    <video controls id="video-element"></video>
+    <div class="video-controls-top" style="position: absolute; top: 15px; right: 15px; z-index: 10; display: flex; gap: 15px; align-items: center;">
+        <!-- Google Cast Launcher -->
+        <google-cast-launcher id="cast-button" class="cast-button"></google-cast-launcher>
+        
+        <button class="video-close" style="background: rgba(0,0,0,0.6); border: 1px solid var(--neon-green, #00FF00); color: var(--neon-green, #00FF00); padding: 5px 12px; cursor: pointer; border-radius: 4px; font-weight: bold;">✕ CERRAR</button>
+    </div>
+    <video controls id="video-element" preload="auto" x-webkit-airplay="allow" style="width: 100%; max-height: 80vh; background: #000;"></video>
 </div>
 
 @if (Model.Any())
@@ -42,7 +47,14 @@
         {
             <div class="video-card" data-video-id="@video.Id" data-title="@video.Titulo">
                 <div class="video-thumb">
-                    🎬
+                    @if (!string.IsNullOrEmpty(video.CoverPath))
+                    {
+                        <img src="/cover/@video.Id" alt="@video.Titulo" style="width:100%; height:100%; object-fit: cover;" />
+                    }
+                    else
+                    {
+                        <span>🎬</span>
+                    }
                     <div class="play-overlay">
                         <span style="font-size: 3rem; color: var(--neon-green, #00FF00);">▶</span>
                     </div>
@@ -50,21 +62,175 @@
                 <div class="video-info">
                     <div class="video-title" title="@video.Titulo">@video.Titulo</div>
                     <div class="video-meta">
-                        <span>@(video.Calidad ?? "SD")</span>
+                        <span>@(video.Calidad ?? "1080p")</span>
                     </div>
-                    <div class="video-actions-row" style="margin-top:8px; display:flex; gap:8px;">
+                    <div class="video-actions-row" style="margin-top:8px; display:flex; flex-wrap: wrap; gap:8px;">
                         <a href="/Streaming/download-file/@video.Id"
                            class="btn-neon small"
-                           style="background: transparent; border: 1px solid var(--neon-green, #00FF00); color: var(--neon-green, #00FF00);"
+                           style="background: transparent; border: 1px solid var(--neon-green, #00FF00); color: var(--neon-green, #00FF00); flex: 1; text-align: center;"
                            title="Descargar video en formato original"
                            onclick="event.stopPropagation();">
-                            ⬇ DESCARGAR VIDEO
+                            ⬇ BAJAR
                         </a>
+                        <button class="btn-neon small red" 
+                                style="flex: 1;"
+                                onclick="event.stopPropagation(); hideVideo(@video.Id, this);"
+                                title="Ocultar de la biblioteca (no borra de Drive)">
+                            👁 OCULTAR
+                        </button>
                     </div>
                 </div>
             </div>
         }
     </div>
+
+    @section Scripts {
+        <!-- Google Cast SDK -->
+        <script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
+        <script>
+            let castPlayer, castController;
+
+            window.__onGCastApiAvailable = function(isAvailable) {
+                if (isAvailable) {
+                    initializeCastApi();
+                }
+            };
+
+            function initializeCastApi() {
+                cast.framework.CastContext.getInstance().setOptions({
+                    receiverApplicationId: chrome.cast.media.DEFAULT_RECEIVER_APP_ID,
+                    autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED
+                });
+
+                castPlayer = new cast.framework.RemotePlayer();
+                castController = new cast.framework.RemotePlayerController(castPlayer);
+
+                // Listen for session changes
+                castController.addEventListener(
+                    cast.framework.RemotePlayerEventType.IS_CONNECTED_CHANGED,
+                    function() {
+                        if (castPlayer.isConnected) {
+                            console.log("Conectado a TV/Chromecast");
+                            if (!videoEl.paused) {
+                                // If already playing locally, transfer to TV
+                                setupCast(videoEl.src, document.title);
+                            }
+                        }
+                    }
+                );
+            }
+
+            function hideVideo(id, btn) {
+                if (!confirm("¿Ocultar este video de la biblioteca? Podrás volver a verlo sincronizando de nuevo si remueves la marca IsHidden en DB, o mediante una futura opción de administración.")) return;
+                
+                fetch('/Media/ToggleHidden', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: id })
+                })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        const card = btn.closest('.video-card');
+                        card.style.opacity = '0';
+                        setTimeout(() => card.remove(), 300);
+                    }
+                });
+            }
+
+            // Video Player Logic with Cast Support
+            const videoEl = document.getElementById('video-element');
+            const playerContainer = document.getElementById('video-player-container');
+
+            document.querySelectorAll('.video-card').forEach(card => {
+                card.addEventListener('click', (e) => {
+                    // Only open on double click or specific play icon
+                    if (e.detail === 2) {
+                        const videoId = card.dataset.videoId;
+                        const title = card.dataset.title;
+                        openVideo(videoId, title);
+                    }
+                });
+                // Mobile support: tap on thumb opens
+                card.querySelector('.video-thumb').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const videoId = card.closest('.video-card').dataset.videoId;
+                    const title = card.closest('.video-card').dataset.title;
+                    openVideo(videoId, title);
+                });
+            });
+
+            function openVideo(id, title) {
+                if (window.FvCore && FvCore.pauseAudio) FvCore.pauseAudio();
+                
+                const streamUrl = `${window.location.origin}/Streaming/video/${id}`;
+                videoEl.src = streamUrl;
+                playerContainer.classList.add('active');
+                
+                // If connected to cast, load media directly on TV
+                if (castPlayer && castPlayer.isConnected) {
+                    setupCast(streamUrl, title);
+                } else {
+                    videoEl.play();
+                }
+                
+                document.title = title + " — FV-CORE";
+            }
+
+            function setupCast(url, title) {
+                const context = cast.framework.CastContext.getInstance();
+                const session = context.getCurrentSession();
+                if (session) {
+                    const mediaInfo = new chrome.cast.media.MediaInfo(url, 'video/mp4');
+                    mediaInfo.metadata = new chrome.cast.media.GenericMediaMetadata();
+                    mediaInfo.metadata.title = title;
+                    mediaInfo.metadata.metadataType = chrome.cast.media.MetadataType.GENERIC;
+                    
+                    const request = new chrome.cast.media.LoadRequest(mediaInfo);
+                    session.loadMedia(request).then(
+                        () => { 
+                            console.log('Media cargada en TV');
+                            videoEl.pause(); // Pause local playback
+                        },
+                        (error) => { console.error('Error al cargar media:', error); }
+                    );
+                }
+            }
+
+            if (videoEl) {
+                // Sync Play/Pause with TV if connected
+                videoEl.onplay = () => {
+                    if (castPlayer && castPlayer.isConnected) {
+                        castController.playOrPause();
+                    }
+                };
+                videoEl.onpause = () => {
+                    if (castPlayer && castPlayer.isConnected && !castPlayer.isPaused) {
+                        castController.playOrPause();
+                    }
+                };
+
+                videoEl.addEventListener('loadedmetadata', function() {
+                    console.log("Video Resolution: " + this.videoWidth + "x" + this.videoHeight);
+                });
+            }
+            
+            document.querySelector('.video-close').addEventListener('click', () => {
+                videoEl.pause();
+                videoEl.src = "";
+                playerContainer.classList.remove('active');
+            });
+        </script>
+    }
+
+    <style>
+        .cast-button {
+            --connected-color: var(--neon-green, #00FF00);
+            --disconnected-color: #ffffff;
+            width: 24px;
+            height: 24px;
+        }
+    </style>
 
     @if (totalPages > 1)
     {
